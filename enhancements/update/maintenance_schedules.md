@@ -1,5 +1,5 @@
 ---
-title: cluster-maintenance-schedules
+title: cluster-change-management-and-maintenance-schedules
 authors:
   - @jupierce
 reviewers: 
@@ -15,23 +15,44 @@ api-approvers:
 creation-date: 2024-02-29
 last-updated: 2024-02-29
 
-tracking-link: # link to the tracking ticket (for example: Jira Feature or Epic ticket) that corresponds to this enhancement
+tracking-link:
   - TBD
   
 ---
 
-# Cluster Maintenance Schedules
+# Cluster Change Management and Maintenance Schedules
 
 ## Summary
-
-Implement high level APIs, called "maintenance schedules" which allow
+Implement high level APIs for change management which allow
 standalone and Hosted Control Plane (HCP) clusters a measure of configurable control
-over when updates to control-plane or worker-node configurations are actuated. 
-Maintenance schedules define reoccurring windows of time (and specifically
+over when control-plane or worker-node configuration rollouts are initiated. 
+As a primary mode of configuring change management, implement an option
+called Maintenance Schedules which define reoccurring windows of time (and specifically
 excluded times) in which potentially disruptive changes in configuration can be initiated. 
-These material changes are left in a pending state until application is permitted by 
-the maintenance schedule. Maintenance schedules do not guarantee that all initiated
-configuration are applied successfully by the close of a window.
+
+Material changes not permitted by change management configuration are left in a 
+pending state until such time as they are permitted by the configuration. 
+
+Change management enforcement _does not_ guarantee that all initiated
+material changes are completed by the close of a permitted change window (e.g. a worker-node
+may still be draining or rebooting) at the close of a maintenance schedule, 
+but it does prevent _additional_ material changes from being initiated. 
+
+A "material change" may vary by cluster profile and subsystem. For example, a 
+control-plane update (all components and control-plane nodes updated) is implemented as
+a single material change (e.g. the close of a scheduled maintenance window
+will not suspend its progress). In contrast, the rollout of worker-node updates is
+more granular (you can consider it as many individual material changes) and  
+the end of a permitted change window will prevent additional worker-node updates 
+from being initiated.
+
+Changes vital to the continued operation of the cluster (e.g. certificate rotation) 
+are not considered material changes. Ignoring operational practicalities (e.g.
+the need to fix critical bugs or update a cluster to supported software versions), 
+it should be possible to safely leave changes pending indefinitely. That said,
+Service Delivery and/or higher level management systems may choose to prevent
+such problematic change management settings from being applied by using 
+validating webhooks.
 
 ## Motivation
 This enhancement is designed to improve user experience during the OpenShift 
@@ -41,32 +62,36 @@ for non-HA workloads.
 
 The enhancement offers a direct operational tool to users while indirectly
 supporting a longer term separation of control-plane and worker-node updates
-into distinct concepts and phases of managing an OpenShift cluster. The motivations
-for both will be covered here as the latter goal, while not completely realized 
-by this enhancement alone, ultimately provides the business value necessary to 
+for **Standalone** cluster profiles into distinct concepts and phases of managing 
+an OpenShift cluster (HCP clusters already provide this distinction). The motivations
+for both aspects will be covered, but a special focus will be made on the motivation
+for separating Standalone control-plane and worker-node updates as, while not fully realized 
+by this enhancement alone, ultimately provides additional business value helping to 
 justify an investment in the new operational tool.
 
 ### Supporting the Eventual Separation of Control-Plane and Worker-Node Updates
 One of the key value propositions of this proposal pre-supposes a successful
-decomposition of the existing, fully self-managed, update process into two  
-distinct phases of the platform update as understood and controlled by the end-user: 
+decomposition of the existing, fully self-managed, Standalone update process into two  
+distinct phases as understood and controlled by the end-user: 
 (1) control-plane update and (2) worker-node updates.
 
-To some extent, Maintenance Schedules are a solution to a problem that will be
-created by this separation: there is a perception that it would also
+To some extent, Maintenance Schedules (a key supported option for change management) 
+are a solution to a problem that will be created by this separation: there is a perception that it would also
 double the operational burden for users updating a cluster (i.e. they have
-two phases to initiate and watch vs just one). In short, implementing the
+two phases to initiate and monitor instead of just one). In short, implementing the
 Maintenance Schedules concept allows users to succinctly express if and how
 they wish to differentiate these phases.
 
-Users well served by the full managed update experience can set maintenance
-windows suggesting control-plane and worker node updates can take place at
+Users well served by the fully self-managed update experience can disable 
+change management (i.e. not set an enforced maintenance schedule), specifying
+that control-plane and worker node updates can take place at
 any time. Users who need more control may choose to update their control-plane
-regularly (e.g. to patch CVEs) while using a maintenance window for worker-nodes
-to only update during specific, low utilization, periods of the year.
+regularly (e.g. to patch CVEs) with a permissive change management configuration
+for the control-plane while using a tight maintenance schedule for worker-nodes
+to only update during specific, low utilization, periods.
 
 Since separating the node update phases is such an important driver for
-Maintenance Windows, their motivations are heavily intertwined. The remainder of this 
+Maintenance Schedules, their motivations are heavily intertwined. The remainder of this 
 section, therefore, delves into the motivation for this separation. 
 
 #### The Case for Control-Plane and Worker-Node Separation
@@ -132,15 +157,10 @@ and intuitive method of deferring worker-node updates: not initiating them. Leav
 discretion, within safe skew-bounds, gives them the flexibility to make the right choices for their
 unique circumstances.
 
-##### Node Update Separation Consistency With Hosted Control Plane
-Hosted Control Plane (HCP) deployments allow users to explicitly control which versions of OpenShift
-are deployed as part of their control-plane and worker-nodes. Adding a similar separation for
-Standalone clusters will support feature parity between the two different cluster profiles.
-
 #### Enhancing Operational Control
-The preceding section delved deeply into a motivation for Maintenance Schedules based on our desire to 
+The preceding section delved deeply into a motivation for Change Management / Maintenance Schedules based on our desire to 
 separate control-plane and worker-node updates without increasing operational burden on end-users. However,
-Maintenance Schedules, by providing control over exactly when updates & material changes to nodes in
+Change Management, by providing control over exactly when updates & material changes to nodes in
 the cluster can be initiated, provide value irrespective of this strategic direction. The benefit of
 controlling exactly when changes are applied to critical systems is universally appreciated in enterprise 
 software. 
@@ -150,9 +170,9 @@ OpenShift meet industry standard expectations with respect to limiting potential
 outside well planned time windows. 
 
 It could be argued that rigorous and time sensitive management of OpenShift cluster API resources could prevent
-unplanned material changes, but Maintenance Schedules introduce higher level, platform native, and more 
+unplanned material changes, but Change Management / Maintenance Schedules introduce higher level, platform native, and more 
 intuitive guard rails. For example, consider the common pattern of a gitops configured OpenShift cluster.
-If a user wants to introduce a change to a MachineConfig, it is straightforward to merge a change to the
+If a user wants to introduce a change to a MachineConfig, it is simple to merge a change to the
 resource without appreciating the fact that it will trigger a rolling reboot of nodes in the cluster.
 
 Trying to merge this change at a particular time of day and/or trying to pause and unpause a 
@@ -161,37 +181,76 @@ significant forethought by the user. Even with that forethought, if an enterpris
 changes to only be applied during weekends, additional custom mechanics would need
 to be employed to ensure the change merged during the weekend without needing someone present.
 
-Contrast this complexity with the user setting a Maintenance Schedule on the cluster. They
-are then free to merge configuration changes and gitops can apply those changes to OpenShift
+Contrast this complexity with the user setting a Change Management / Maintenance Schedule on the cluster. The user
+is then free to merge configuration changes and gitops can apply those changes to OpenShift
 resources, but material change to the cluster will not be initiated until a time permitted
 by the Maintenance Schedule. Users do not require special insight into the implications of
 configuring platform resources as the top-level Maintenance Schedule control will help ensure
 that potentially disruptive changes are limited to well known time windows.
 
 #### Reducing Service Delivery Operational Tooling
-Service Delivery, as part of our OpenShift Dedicated and other offerings is keenly aware of
-the issues motivating the Maintenance Schedule concept. This is evidenced by their design
+Service Delivery, as part of our OpenShift Dedicated, ROSA and other offerings is keenly aware of
+the issues motivating the Change Management / Maintenance Schedule concept. This is evidenced by their design
 and implementation of tooling to fill the gaps in the platform the preceding sections
-suggest exist. For example:
-1. Service Delivery has developed UXs outside the platform which allow customers to define a preferred maintenance window. For example, when requesting an update, the user can specify the desired start time.
-2. Service Delivery developed the Managed Update Operator (MUO) which supports limiting the amount of time a node can utilize to drain before being more forcibly rebooted. 
+suggest exist.
 
-By acknowledging the need for these features in the platform, we reduce the need for Service
-Delivery to develop custom tooling to manage the platform while simultaneously reducing simplifying
-management for all customer facing similar challenges.
+Specifically, Service Delivery has developed UXs outside the platform which allow customers 
+to define a preferred maintenance window. For example, when requesting an update, the user 
+can specify the desired start time. This is honored by Service Delivery tooling (unless
+there are reasons to supersede the customer's preference).
+
+By acknowledging the need for scheduled maintenance in the platform, we reduce the need for Service
+Delivery to develop and maintain custom tooling to manage the platform while 
+simultaneously reducing simplifying management for all customer facing similar challenges.
 
 ### User Stories
 
-Detail the things that people will be able to do if this is implemented and
-what goal that allows them to achieve. In each story, explain who the actor
-is based on their role, explain what they want to do with the system,
-and explain the underlying goal they have, what it is they are going to
-achieve with this new feature.
+> "As a cluster administrator, I want to ensure any material changes to my cluster 
+> (control-plane or worker-nodes) are only initiated during well known windows of low service 
+> utilization to reduce the impact of any service disruption."
 
-Use the standard three part formula:
+> "As a cluster administrator, I want to ensure any material changes to my 
+> control-plane are only initiated during well known windows of low service utilization to 
+> reduce the impact of any service disruption."
 
-> "As a _role_, I want to _take some action_ so that I can _accomplish a
-goal_."
+> "As a cluster administrator, I want to ensure that no material changes to my 
+> cluster occurs during a known date range even if it falls within our
+> normal maintenance schedule due to an anticipated atypical usage (e.g. Black Friday)."
+
+> "As a cluster administrator, I want to ensure any material changes to my 
+> control-plane are only initiated during well known windows of low service utilization to 
+> reduce the impact of any service disruption. Furthermore, I want to ensure that material
+> changes to my worker-nodes occur on a less frequent cadence because I know my workloads
+> are not HA."
+
+> "As a Service Delivery engineer, tasked with performing non-emergency corrective action, I want 
+> to be able to apply a desired configuration (e.g. PID limit change) and have that change roll out 
+> in a minimally disruptive way subject to the customer's configured maintenance schedule."
+
+> "As a Service Delivery engineer, tasked with performing emergency corrective action, I want to be able to 
+> quickly disable a configured maintenance schedule, apply necessary changes, have them roll out immediately, 
+> and restore the maintenance schedule to its previous configuration."
+
+> "As a cluster administrator who is well served by a fully managed update without maintenance windows, 
+> I want to be minimally inconvenienced by the introduction of maintenance schedules."
+
+> "As a cluster administrator, I want to easily determine the next time at which maintenance operations
+> will be permitted to be initiated, based on the configured maintenance schedule, by looking at the 
+> status of relevant API resources or metrics."
+
+> "As a cluster administrator, I want to easily determine whether there are material changes pending for
+> my cluster, awaiting a permitted window based on the configured maintenance schedule, by looking at the 
+> status of relevant API resources or metrics."
+
+> "As a cluster administrator, I want to easily determine whether a maintenance schedule is currently being
+> enforced on my cluster by looking at the status of relevant API resources or metrics."
+
+> "As a cluster administrator, I want to be able to alert my operations team when changes are pending,
+> when the number of seconds to the next permitted window approaches, or when a maintenance window is not being
+> enforced on my cluster.."
+
+
+
 
 Make the change feel real for users, without getting bogged down in
 implementation details.
