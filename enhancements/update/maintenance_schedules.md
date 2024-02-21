@@ -204,110 +204,101 @@ Delivery to develop and maintain custom tooling to manage the platform while
 simultaneously reducing simplifying management for all customer facing similar challenges.
 
 ### User Stories
+For readability, "cluster lifecycle administrator" is used repeatedly in the user stories. This 
+term can apply to different roles depending on the cluster environment and profile. In general,
+it is the person or team making most material changes to the cluster - including planning and
+choosing when to enact phases of the OpenShift platform update.
 
-> "As a cluster administrator, I want to ensure any material changes to my cluster 
+For HCP, the role is called the [Cluster Service Consumer](https://hypershift-docs.netlify.app/reference/concepts-and-personas/#personas). For
+Standalone clusters, this role would normally be filled by one or more `system:admin` users. There
+may be several layers of abstraction between the cluster lifecycle administrator and changes being
+actuated on the cluster (e.g. gitops, OCM, Hive, etc.), but the role will still be concerned with limiting
+risks and disruption when rolling out changes to their environments.
+
+> "As a cluster lifecycle administrator, I want to ensure any material changes to my cluster 
 > (control-plane or worker-nodes) are only initiated during well known windows of low service 
 > utilization to reduce the impact of any service disruption."
 
-> "As a cluster administrator, I want to ensure any material changes to my 
+> "As a cluster lifecycle administrator, I want to ensure any material changes to my 
 > control-plane are only initiated during well known windows of low service utilization to 
 > reduce the impact of any service disruption."
 
-> "As a cluster administrator, I want to ensure that no material changes to my 
+> "As a cluster lifecycle administrator, I want to ensure that no material changes to my 
 > cluster occurs during a known date range even if it falls within our
 > normal maintenance schedule due to an anticipated atypical usage (e.g. Black Friday)."
 
-> "As a cluster administrator, I want to ensure any material changes to my 
+> "As a cluster lifecycle administrator, I want to suspend additional material changes from 
+> taking place when it is no longer practical to monitor for service disruptions. For example,
+> if a worker-node update is proving to be problematic during a valid maintenance window, I would
+> like to be able to pause that change manually so that the team will not have to work on the weekend."
+
+> "As a cluster lifecycle administrator, I want to ensure any material changes to my 
 > control-plane are only initiated during well known windows of low service utilization to 
 > reduce the impact of any service disruption. Furthermore, I want to ensure that material
 > changes to my worker-nodes occur on a less frequent cadence because I know my workloads
 > are not HA."
 
-> "As a Service Delivery engineer, tasked with performing non-emergency corrective action, I want 
+> "As an SRE, tasked with performing non-emergency corrective action, I want 
 > to be able to apply a desired configuration (e.g. PID limit change) and have that change roll out 
 > in a minimally disruptive way subject to the customer's configured maintenance schedule."
 
-> "As a Service Delivery engineer, tasked with performing emergency corrective action, I want to be able to 
+> "As an SRE, tasked with performing emergency corrective action, I want to be able to 
 > quickly disable a configured maintenance schedule, apply necessary changes, have them roll out immediately, 
 > and restore the maintenance schedule to its previous configuration."
 
-> "As a cluster administrator who is well served by a fully managed update without maintenance windows, 
+> "As a leader within the Service Delivery organization, tasked with performing emergency corrective action
+> across our fleet, I want to be able to bypass and then restore customer maintenance schedules
+> with minimal technical overhead."
+
+> "As a cluster lifecycle administrator who is well served by a fully managed update without maintenance windows, 
 > I want to be minimally inconvenienced by the introduction of maintenance schedules."
 
-> "As a cluster administrator, I want to easily determine the next time at which maintenance operations
+> "As a cluster lifecycle administrator who is not well served by a fully managed update and needs exacting 
+> control over when material changes occur on my cluster where opportunities do NOT arise at reoccurring intervals,
+> I want to employ a change management strategy that defers material changes until I perform a manual action."
+
+> "As a cluster lifecycle administrator, I want to easily determine the next time at which maintenance operations
 > will be permitted to be initiated, based on the configured maintenance schedule, by looking at the 
 > status of relevant API resources or metrics."
 
-> "As a cluster administrator, I want to easily determine whether there are material changes pending for
+> "As a cluster lifecycle administrator, I want to easily determine whether there are material changes pending for
 > my cluster, awaiting a permitted window based on the configured maintenance schedule, by looking at the 
 > status of relevant API resources or metrics."
 
-> "As a cluster administrator, I want to easily determine whether a maintenance schedule is currently being
+> "As a cluster lifecycle administrator, I want to easily determine whether a maintenance schedule is currently being
 > enforced on my cluster by looking at the status of relevant API resources or metrics."
 
-> "As a cluster administrator, I want to be able to alert my operations team when changes are pending,
-> when the number of seconds to the next permitted window approaches, or when a maintenance window is not being
-> enforced on my cluster.."
+> "As a cluster lifecycle administrator, I want to be able to alert my operations team when changes are pending,
+> when and the number of seconds to the next permitted window approaches, or when a maintenance window is not being
+> enforced on my cluster."
 
+> "As a cluster lifecycle administrator, I want to be able to diagnose why pending changes have not been applied
+> if I expected them to be."
 
-
-
-Make the change feel real for users, without getting bogged down in
-implementation details.
-
-Here are some example user stories to show what they might look like:
-
-* As an OpenShift engineer, I want to write an enhancement, so that I
-  can get feedback on my design and build consensus about the approach
-  to take before starting the implementation.
-* As an OpenShift engineer, I want to understand the rationale behind
-  a particular feature's design and alternatives considered, so I can
-  work on a new enhancement in that problem space knowing the history
-  of the current design better.
-* As a product manager, I want to review this enhancement proposal, so
-  that I can make sure the customer requirements are met by the
-  design.
-* As an administrator, I want a one-click OpenShift installer, so that
-  I can easily set up a new cluster without having to follow a long
-  set of operations.
-
-In each example, the persona's goal is clear, and the goal is clearly provided
-by the capability being described.
-The engineer wants feedback on their enhancement from their peers, and writing
-an enhancement allows for that feedback.
-The product manager wants to make sure that their customer requirements are fulfilled,
-reviewing the enhancement allows them to check that.
-The administrator wants to set up his OpenShift cluster as easily as possible, and
-reducing the install to a single click simplifies that process.
-
-Here are some real examples from previous enhancements:
-* [As a member of OpenShift concerned with the release process (TRT, dev, staff engineer, maybe even PM),
-I want to opt in to pre-release features so that I can run periodic testing in CI and obtain a signal of
-feature quality.](https://github.com/openshift/enhancements/blob/master/enhancements/installer/feature-sets.md#user-stories)
-* [As a cloud-provider affiliated engineer / platform integrator / RH partner
-I want to have a mechanism to signal OpenShift's built-in operators about additional
-cloud-provider specific components so that I can inject my own platform-specific controllers into OpenShift
-to improve the integration between OpenShift and my cloud provider.](https://github.com/openshift/enhancements/blob/master/enhancements/cloud-integration/infrastructure-external-platform-type.md#user-stories)
-* [As an OpenShift cluster administrator, I want to add worker nodes to my
-existing single control-plane node cluster, so that it'll be able to meet
-growing computation demands.](https://github.com/openshift/enhancements/blob/master/enhancements/single-node/single-node-openshift-with-workers.md#user-stories)
-
-Include a story on how this proposal will be operationalized:
-life-cycled, monitored and remediated at scale.
+> "As a cluster administrator or privileged user familiar with OpenShift prior to the introduction of change management, 
+> I want it to be clear when I am looking at the desired versus actual state of the system. For example, if I can see 
+> the state of the clusterversion or a machineconfigpool, it should be straightforward to understand why I am 
+> observing differences in the state of those resources compared to the state of the system."
 
 ### Goals
 
-Summarize the specific goals of the proposal. How will we know that
-this has succeeded?  A good goal describes something a user wants from
-their perspective, and does not include the implementation details
-from the proposal.
+1. Indirectly support the strategic separation of control-plane and worker-node update phases for Standalone clusters by supplying a change control mechanism that will allow both control-plane and worker-node updates to proceed at predictable times without doubling operational overhead.
+2. Directly support the strategic separation of control-plane and worker-node update phases by implementing a "manual" change management strategy where users who value the full control of the separation can manually actuate changes to them independently.
+3. Empower OpenShift cluster lifecycle administrators with tools that simplify implementing industry standard notions of maintenance windows.
+4. Provide Service Delivery a platform native feature which will reduce the amount of custom tooling necessary to provide maintenance windows for customers.
+5. Deliver a consistent change management experience across all platforms and profiles (e.g. Standalone, ROSA, HCP).
+6. Enable SRE to, when appropriate, make configuration changes on a customer cluster and have that change actually take effect only when permitted by the customer's change management preferences.
+7. Do not subvert expectations of customers well served by the existing fully self-managed cluster update.
+8. Ensure the architectural flexibility of enabling different change management strategies in the future. 
 
 ### Non-Goals
 
-What is out of scope for this proposal? Listing non-goals helps to
-focus discussion and make progress. Highlight anything that is being
-deferred to a later phase of implementation that may call for its own
-enhancement.
+1. Allowing control-plane upgrades to be paused midway through an update. Control-plane updates are relatively rapid and pausing will introduce unnecessary complexity and risk. 
+2. Requiring the use of maintenance schedules for OpenShift upgrades (the changes should be compatible with various upgrade methodologies – including being manually triggered).
+3. Allowing Standalone worker-nodes to upgrade to a different payload version than the control-plane (this is supported in HCP, but is not a goal for standalone).
+4. Exposing maintenance schedule controls from the oc CLI. This may be a future goal but is not required by this enhancement.
+5. Providing strict promises around the exact timing of upgrade processes. Maintenance schedules will be honored to a reasonable extent (e.g. upgrade actions will only be initiated during a window), but long running operations may exceed the configured end of a maintenance schedule.
+6. Implementing logic to defend against impractical maintenance schedules (e.g. if a customer configures a 1 second maintenance schedule every year). Service Delivery may want to implement such logic to ensure upgrade progress can be made.
 
 ## Proposal
 
