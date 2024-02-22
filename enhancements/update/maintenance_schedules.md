@@ -420,6 +420,10 @@ property.
 
 ### Workflow Description
 
+#### OCM / HyperShift Configuration
+
+1. A cluster service consumer
+
 Explain how the user will use the feature. Be detailed and explicit.
 Describe all of the actors, their roles, and the APIs or interfaces
 involved. Define a starting state and then list the steps that the
@@ -471,28 +475,31 @@ of API Extensions" section.
 
 #### Hypershift / Hosted Control Planes
 
-Are there any unique considerations for making this change work with
-Hypershift?
-
-See https://github.com/openshift/enhancements/blob/e044f84e9b2bafa600e6c24e35d226463c2308a5/enhancements/multi-arch/heterogeneous-architecture-clusters.md?plain=1#L282
-
-How does it affect any of the components running in the
-management cluster? How does it affect any components running split
-between the management cluster and guest cluster?
+In the HCP topology, the HostedCluster and NodePool resources are enhanced to support the change management strategies
+`MaintenanceSchedule` and `Disabled`. 
 
 #### Standalone Clusters
 
-Is the change relevant for standalone clusters?
+In the Standalone topology, the ClusterVersion and MachineConfigPool resources are enhanced to support the change management strategies
+`MaintenanceSchedule` and `Disabled`. The MachineConfigPool also supports the `Manual` strategy. 
+
+Only non-master MCPs must accept and honor the change management configuration. Non-support for change management in
+master MCPs should be documented. The MCO implementation may choose to ignore configured master change management
+policies at runtime or prevent them during admissions.
 
 #### Single-node Deployments or MicroShift
 
-How does this proposal affect the resource consumption of a
-single-node OpenShift deployment (SNO), CPU and memory?
+The ClusterVersion operator will honor the change management field just as in a standalone profile. If those profiles
+have the a MachineConfigPool, material changes the node could be controlled with a change management policy
+in that resource.
 
-How does this proposal affect MicroShift? For example, if the proposal
-adds configuration options through API resources, should any of those
-behaviors also be exposed to MicroShift admins through the
-configuration file for MicroShift?
+#### OCM Managed Instances
+OpenShift Cluster Manager (OCM) should expose a user interface allowing users to manage their change management policy.
+Standard Fleet clusters will expose the option to configure the MaintenanceSchedule strategy - including
+only permit and exclude times.
+
+- Service Delivery will reserve the right to disable this strategy for emergency corrective actions.
+- Service Delivery should constrain permit & exclude configurations based on their internal policies. For example, customers may be forced to enable maintenance windows amount to at least 6 hours a month.
 
 ### Implementation Details/Notes/Constraints
 
