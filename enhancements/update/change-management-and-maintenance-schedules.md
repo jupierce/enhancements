@@ -1,5 +1,5 @@
 ---
-title: cluster-change-management-and-maintenance-schedules
+title: change-management-and-maintenance-schedules
 authors:
   - @jupierce
 reviewers: 
@@ -20,7 +20,7 @@ tracking-link:
   
 ---
 
-# Cluster Change Management and Maintenance Schedules
+# Change Management and Maintenance Schedules
 
 ## Summary
 Implement high level APIs for change management which allow
@@ -350,7 +350,7 @@ maintenance schedule, do you want to have to the challenge of keeping every Mach
 without your knowledge?
  
 The hierarchical approach allows a single master change management policy to be in place across 
-bother the control-plane and worker-nodes. 
+both the control-plane and worker-nodes. 
 
 Conversely, material changes CAN take place on the control-plane when permitted by its associated 
 change management policy even while material changes are not being permitted by worker-nodes 
@@ -398,61 +398,242 @@ This strategy indicates that no change management strategy is being enforced by 
 mean that material change is permitted due to change management hierarchies. For example, a MachineConfigPool
 with `strategy: Disabled` would still be subject to a `strategy: MaintenanceWindow` in the ClusterVersion resource.
 
-#### Manual Strategy
+#### Assisted Strategy - MachineConfigPool
 Minimally, this strategy will be supported by MachineConfigPool. If and when the strategy is supported by other
 change management capable resources, the configuration schema for the policy may differ as the details of
 what constitutes and informs change varies between resources. 
 
-#### Manual Strategy - MachineConfigPool
 This strategy is motivated by the desire to support the separation of control-plane and worker-node updates both
 conceptually for users and in real technical terms. One way to do this for users who do not benefit from the
-`MaintenanceSchedule` strategy is to ask them to manually initiate, pause, and resume the rollout of material
+`MaintenanceSchedule` strategy is to ask them to initiate, pause, and resume the rollout of material
 changes to their worker nodes. Contrast this with the fully self-managed state today, where worker-nodes
 (normally) begin to be updated automatically and directly after the control-plane update.
 
 Clearly, if this was the only mode of updating worker-nodes, we could never successfully disentangle the
 concepts of control-plane vs worker-node updates in Standalone environments since one implies the other.
 
-In short (details will follow in the implementation section), the manual strategy allows users to specify the
+In short (details will follow in the implementation section), the assisted strategy allows users to specify the
 exact rendered [`desiredConfig` the MachineConfigPool](https://github.com/openshift/machine-config-operator/blob/5112d4f8e562a2b072106f0336aeab451341d7dc/docs/MachineConfigDaemon.md#coordinating-updates) should be advertising to the MachineConfigDaemon on
 nodes it is associated with. Like the `MaintenanceSchedule` strategy, it also exposes a `pausedUntil`
 property.
 
+#### Manual Strategy - MachineConfigPool
+Minimally, this strategy will be supported by MachineConfigPool. If and when the strategy is supported by other
+change management capable resources, the configuration schema for the policy may differ as the details of
+what constitutes and informs change varies between resources. 
+
+Like the Assisted strategy, this strategy is implemented to support the conceptual and technical separation
+of control-plane and worker-nodes. The MachineConfigPool Manual strategy allows users to explicitly specify
+their `desiredConfig` to be used for ignition of new and rebooting nodes. While the Manual strategy is enabled,
+the MachineConfigOperator will not trigger the MachineConfigDaemon to drain or reboot nodes automatically.
+
+
 ### Workflow Description
 
-#### OCM / HyperShift Configuration
+#### OCM HCP Standard Change Management Scenario
 
-1. A cluster service consumer
+1. A [Cluster Service Consumer](https://hypershift-docs.netlify.app/reference/concepts-and-personas/#personas) requests an HCP cluster via OCM.
+1. To comply with their company policy, the service consumer configures a maintenance schedule through OCM. 
+1. Their first preference, no updates at all, is rejected by OCM policy and they are referred to service 
+   delivery documentation explaining minimum requirements. 
+1. The user specifies a policy which permits changes to be initiated any time Saturday UTC on the control-plane.
+1. To limit perceived risk, they try to specify a separate policy permitting worker-nodes updates only on the **first** Sunday of each month.
+1. OCM rejects the configuration because, due to change management hierarchy, worker-node maintenance schedules can only be a proper subset of control-plane maintenance schedules.
+1. The user changes their preference to a policy permitting worker-nodes updates only on the **first** Saturday of each month.
+1. OCM accepts the configuration.
+1. OCM configures the HCP (HostedCluster/NodePool) resources via the Service Delivery Hive deployment to contain a `changeManagement` stanza 
+   and an active/configured `MaintenanceSchedule` strategy.
+1. Hive updates the associated HCP resources.
+1. Company workloads are added to the new cluster and the cluster provides value.
+1. To leverage a new feature in OpenShift, the service consumer plans to update the minor version of the platform.
+1. Via OCM, the service consumer requests the minor version update. They can do this at any time with confidence that the maintenance 
+   schedule will be honored. They do so on Wednesday.
+1. OCM (through various layers) updates the target release payload in the HCP HostedCluster and NodePool.
+1. The HyperShift Operator detects the desired changes but recognizes that the `changeManagement` stanza 
+    precludes the updates from being initiated.
+1. Curious, the service consumer checks the projects ClusterVersion within the HostedCluster and reviews its `status` stanza. It shows that changes are pending and the time of the next window in which changes can be initiated.  
+1. Separate metrics specific to change management indicate that changes are pending for both resources.
+1. The non-Red Hat operations team has alerts setup to fire when changes are pending and the number of 
+    seconds before the next permitted window is less than 2 days away.
+1. These alerts fire after Thursday UTC 00:00 to inform the operations team that changes are about to be applied to the control-plane.
+1. It is not the first week of the month, so there is no alert fired for the NodePool pending changes.
+1. The operations team is comfortable with the changes being rolled out on the control-plane. 
+1. On Saturday 00:00 UTC, the HyperShift operator initiates changes the control-plane update.
+1. The update completes without issue.
+1. Changes remain pending for the NodePool resource.
+1. As the first Saturday of the month approaches, the operations alerts fire to inform the team of forthcoming changes.
+1. The operations team realizes that a corporate team needs to use the cluster heavily during the weekend for a business critical deliverable.
+1. The service consumer logs into OCM and adds an exclusion for the upcoming Saturday.
+1. Interpreting the new exclusion, the metric for time remaining until a permitted window increases to count down to the following month's first Saturday.
+1. A month passes and the pending cause the configured alerts to fire again.
+1. The operations team is comfortable with the forthcoming changes.
+1. The first Saturday of the month 00:00 UTC arrives. The HyperShift operator initiates the worker-node updates based on the pending changes in the cluster NodePool.
+1. The HCP cluster has a large number of worker nodes and draining and rebooting them is time-consuming. 
+1. At 23:59 UTC Saturday night, 80% of worker-nodes have been updated. Since the maintenance schedule still permits the initiation of material changes, another worker-node begins to be updated.
+1. The update of this worker-node continues, but at 00:00 UTC Sunday, no further material changes are permitted by the change management policy and the worker-node update process is effectively paused.
+1. Because not all worker-nodes have been updated, changes are still reported as pending via metrics for NodePool.  **TODO: Review with HyperShift. Pausing progress should be possible, but a metric indicating changes still pending may not since they interact only through CAPI.**
+1. The HCP cluster runs with worker-nodes at mixed versions throughout the month. The N-1 skew between the old kubelet versions and control-plane is supported.
+1. **TODO: Review with Service Delivery. If the user requested another minor bump to their control-plane, how does OCM prevent unsupported version skew today?**
+1. On the next first Saturday, the worker-nodes updates are completed.
 
-Explain how the user will use the feature. Be detailed and explicit.
-Describe all of the actors, their roles, and the APIs or interfaces
-involved. Define a starting state and then list the steps that the
-user would need to go through to trigger the feature described in the
-enhancement. Optionally add a
-[mermaid](https://github.com/mermaid-js/mermaid#readme) sequence
-diagram.
+#### OCM Standalone Standard Change Management Scenario
 
-Use sub-sections to explain variations, such as for error handling,
-failure recovery, or alternative outcomes.
+1. User interactions with OCM to configure a maintenance schedule are identical to [OCM HCP Standard Change Management Scenario](#ocm-hcp-standard-change-management-scenario).
+   This scenario differs after OCM accepts the maintenance schedule configuration. Control-plane updates are permitted to be initiated to any Saturday UTC.
+   Worker-nodes must wait until the first Saturday of the month.
+1. OCM (through various layers) configures the ClusterVersion and worker MachineConfigPool(s) (MCP) for the cluster with appropriate `changeManagement` stanzas.
+1. Company workloads are added to the new cluster and the cluster provides value.
+1. To leverage a new feature in OpenShift, the service consumer plans to update the minor version of the platform.
+1. Via OCM, the service consumer requests the minor version update. They can do this at any time with confidence that the maintenance 
+   schedule will be honored. They do so on Wednesday.
+1. OCM (through various layers) updates the ClusterVersion resource on the cluster indicating the new release payload in `desiredUpdate`.
+1. The Cluster Version Operator (CVO) detects that its `changeManagement` stanza does not permit the initiation of the change.
+1. The CVO sets a metric indicating that changes are pending for ClusterVersion. Irrespective of pending changes, the CVO also exposes a 
+   metric indicating the number of seconds until the next window in which material changes can be initiated.
+1. Since MachineConfigs do not match in the desired update and the current manifests, the CVO also sets a metric indicating that MachineConfig
+   changes are pending. This is done because the MachineConfigOperator (MCO) cannot anticipate the coming manifest changes and cannot,
+   therefore, reflect expected changes to the worker-node MCPs. Anticipating this change ahead of time is necessary for an operation
+   team to be able to set an alert with the semantics (worker-node-update changes are pending & time remaining until changes are permitted < 2d).
+   The MCO will expose its own metric for changes pending when manifests are updated. But this metric will only indicate when 
+   there are machines in the pool that have not achieved the desired configuration. An operations team trying to implement the 2d 
+   early warning for worker-nodes must use OR on these metrics to determine whether changes are actually pending.
+1. The MCO, irrespective of pending changes, exposes a metric for each MCP to indicate the number of seconds remaining until it is
+   permitted to initiate changes to nodes in that MCP.
+1. A privileged user on the cluster notices different options available for `changeManagement` in the ClusterVersion and MachineConfigPool
+   resources. They try to set them but are prevented by either RBAC or an admission webhook (details for Service Delivery). If they wish
+   to change the settings, they must update them through OCM.
+1. The privileged user does an `oc describe ...` on the resources. They can see that material changes are pending in ClusterVersion for 
+   the control-plane and for worker machine config. They can also see the date and time that the next material change will be permitted.
+   The MCP will not show a pending change at this time, but will show the next time at which material changes will be permitted.
+1. The next Saturday is _not_ the first Saturday of the month. The CVO detects that material changes are permitted at 00:00 UTC and
+   begins to apply manifests. This effectively initiates the control-plane update process, which is considered a single
+   material change to the cluster.
+1. The control-plane update succeeds. The CVO, having reconciled its state, unsets metrics suggesting changes are pending.
+1. As part of updating cluster manifests, MachineConfigs have been modified. The MachineConfigOperator (MCO) re-renders a
+   configuration for worker-nodes. However, because the MCP maintenance schedule precludes initiating material changes,
+   it will not begin to update Machines with that desired configuration.
+1. The MCO will set a metric indicating that desired changes are pending. 
+1. `oc get -o=yaml/describe` will both provide status information indicating that changes are pending for the MCP and
+   the time at which the next material changes can be initiated according to the maintenance schedule.
+1. On the first Saturday of the next month, 00:00 UTC, the MCO determines that material changes are permitted.
+   Based on limits like maxUnavailable, the MCO begins to annotate nodes with the desiredConfiguration. The 
+   MachineConfigDaemon takes over from there, draining, and rebooting nodes into the updated release.
+1. There are a large number of nodes in the cluster and this process continues for more than 24 hours. On Saturday
+   23:59, the MCO applies a round of desired configurations annotations to Nodes. At 00:00 on Sunday, it detects
+   that material changes can no longer be initiated, and pauses its activity. Node updates that have already
+   been initiated continue beyond the maintenance schedule window.
+1. Since not all nodes have been updated, the MCO continues to expose a metric informing the system of
+   pending changes.
+1. In the subsequent days, the cluster is scaled up to handle additional workload. The new nodes receive
+   the most recent, desired configuration.    
+1. On the first Saturday of the next month, the MCO resumes its work. In order to ensure that forward progress is
+   made for all nodes, the MCO will update nodes that have the oldest current configuration first. This ensures
+   that even if the desired configuration has changed multiple times while maintenance was not permitted,
+   no nodes are starved of updates. Consider the alternative where (a) worker-node updates required > 24h,
+   (b) updates to nodes are performed alphabetically, and (c) MachineConfigs are frequently being changed
+   during times when maintenance is not permitted. This strategy could leave nodes sorting last 
+   lexicographically no opportunity to receive updates. This scenario would eventually leave those nodes
+   more prone to version skew issues.
+1. During this window of time, all node updates are initiated and they complete successfully. 
 
-For example:
+#### Service Delivery Emergency Patch
+1. SRE determines that a significant new CVE threatens the fleet.
+1. A new OpenShift release in each z-stream fixes the problem.
+1. SRE plans to override customer maintenance schedules in order to rapidly remediate the problem across the fleet.
+1. The new OpenShift release(s) are configured across the fleet. Clusters with permissive maintenance 
+   schedules begin to apply the changes immediately.
+1. Clusters with change management policies precluding updates are SRE's next focus.
+1. During each region's evening hours, to limit disruption, SRE changes the `changeManagement` strategy 
+   field across relevant resources to `Disabled`. Changes that were previously pending are now
+   permitted to be initiated. 
+1. Cluster operators who have alerts configured to fire when there is no change management policy in place 
+   will do so.
+1. As clusters are successfully remediated, SRE restores the `MaintenanceSchedule' strategy for its resources.
+   
 
-**cluster creator** is a human user responsible for deploying a
-cluster.
+#### Service Delivery Immediate Remediation
+1. A customer raises a ticket for a problem that is eventually determined to be caused by a worker-node system configuration.
+1. SRE can address the issue with a system configuration file applied in a MachineConfig.
+1. SRE creates the MachineConfig for the customer and provides the customer the option to either (a) wait until their
+   configured maintenance schedule permits the material change from being initiated by the MachineConfigOperator
+   or (b) having SRE override the maintenance schedule and permitting its immediate application.   
+1. The customer chooses immediate application. 
+1. SRE applies a change to the relevant control-plane AND worker-node resource's `changeManagement` stanza
+   (both must be changed because of the change management hierarchy), setting `disabledUntil` to
+   a time 48 hours in the future. The configured change management schedule is ignored for 48 as the system 
+   initiates all necessary node changes.
 
-**application administrator** is a human user responsible for
-deploying an application in a cluster.
+#### Service Delivery Deferred Remediation
+1. A customer raises a ticket for a problem that is eventually determined to be caused by a worker-node system configuration.
+1. SRE can address the issue with a system configuration file applied in a MachineConfig.
+1. SRE creates the MachineConfig for the customer and provides the customer the option to either (a) wait until their
+   configured maintenance schedule permits the material change from being initiated by the MachineConfigOperator
+   or (b) having SRE override the maintenance schedule and permitting its immediate application.   
+1. The problem is not pervasive, so the customer chooses the deferred remediation. 
+1. The change is initiated and nodes are rebooted during the next permitted maintenance window.
 
-1. The cluster creator sits down at their keyboard...
-2. ...
-3. The cluster creator sees that their cluster is ready to receive
-   applications, and gives the application administrator their
-   credentials.
 
-See
-https://github.com/openshift/enhancements/blob/master/enhancements/workload-partitioning/management-workload-partitioning.md#high-level-end-to-end-workflow
-and https://github.com/openshift/enhancements/blob/master/enhancements/agent-installer/automated-workflow-for-agent-based-installer.md for more detailed examples.
-
+#### On-prem Standalone GitOps Change Management Scenario
+1. An on-prem cluster is fully managed by gitops. As changes are committed to git, those changes are applied to cluster resources.
+1. Configurable stanzas of the ClusterVersion and MachineConfigPool(s) resources are checked into git.
+1. The cluster lifecycle administrator configures `changeManagement` in both the ClusterVersion and worker MachineConfigPool
+   in git. The MaintenanceSchedule strategy is chosen. The policy permits control-plane and worker-node updates only after
+   19:00 Eastern US.
+1. During the working day, users may contribute and merge changes to MachineConfigs or even the `desiredUpdate` of the
+   ClusterVersion. These resources will be updated in a timeline manner via GitOps.
+1. Despite the resource changes, neither the CVO nor MCO will begin to initiate the material changes on the cluster.
+1. Privileged users who may be curious as to the discrepancy between git and the cluster state can use `oc get -o=yaml/describe`
+   on the resources. They observe that changes are pending and the time at which changes will be initiated.
+1. At 19:00 Eastern, the pending changes begin to be initiated. This rollout abides by documented OpenShift constraints
+   such as the MachineConfigPool `maxUnavailable` setting.
+   
+#### On-prem Standalone Manual Strategy Scenario
+1. A small, business critical cluster is being run on-prem.
+1. There are no reoccurring windows of time when the cluster lifecycle administrator can tolerate downtime.
+   Instead, updates are negotiated and planned far in advance. 
+1. The cluster workloads are not HA and unplanned drains are considered a business risk.
+1. To prevent surprises, the cluster lifecycle administrator sets the Manual strategy on the worker MCP.
+1. Given the sensitivity of the operation, the lifecycle administrator wants to manually drain and reboot
+   nodes to accomplish the update.
+1. The cluster lifecycle administrator sends a company-wide notice about the period during which service may be disrupted.
+1. The user determines the most recent rendered worker configuration. They configure the `manual` change
+   management policy to use that exact configuration as the `desiredConfig`. 
+1. The MCO is thus being asked to ignite any new node or rebooted node with the desired configuration, but it
+   is **not** being permitted to apply that configuration to existing nodes because it is change management, in effect,
+   is paused indefinitely by the manual strategy.
+1. The MCO metric for the MCP indicating the number of seconds remaining until changes can be initiated is `-1` - indicating
+   that there is presently no time in the future where it will initiate material changes. The operations team
+   has an alert configured if this value `!= -1`.
+1. The MCO metric for the MCP indicating that changes are pending is set because not all nodes are running
+   the most recently rendered configuration. This is irrespective of the `desiredConfig` in the `manual` 
+   policy. Abstractly, it means, if change management were disabled, whether changes be initiated.
+1. The cluster lifecycle administrator manually drains and reboots nodes in the cluster. As they come back online,
+   the MachineConfigServer offers them the desiredConfig requested by the manual policy.
+1. After updating all nodes, the cluster lifecycle administrator does not need make any additional 
+   configuration changes. They can leave the `changeManagement` stanza in their MCP as-is.
+   
+#### On-prem Standalone Assisted Strategy Scenario
+1. A large, business critical cluster is being run on-prem.
+1. There are no reoccurring windows of time when the cluster lifecycle administrator can tolerate downtime.
+   Instead, updates are negotiated and planned far in advance. 
+1. The cluster workloads are not HA and unplanned drains are considered a business risk.
+1. To prevent surprises, the cluster lifecycle administrator sets the Assisted strategy on the worker MCP.
+1. In the `assisted` strategy change management policy, the lifecycle administrator configures `pausedUntil: true`
+   and the most recently rendered worker configuration in the policy's `desiredConfig`.
+1. The MCO is being asked to ignite any new node or any rebooted node with the desired configuration. However,
+   becaused of `pausedUntil: true`, it is also being asked not to automatically initiate that material change
+   for existing nodes.
+1. The MCO metric for the MCP indicating the number of seconds remaining until changes can be initiated is `-1` - indicating
+   that there is presently no time in the future where it will initiate material changes. The operations team
+   has an alert configured if this value `!= -1`.
+1. The MCO metric for the MCP indicating that changes are pending is set because not all nodes are running
+   the most recently rendered configuration. This is irrespective of the `desiredConfig` in the `manual` 
+   policy. Abstractly, it means, if change management were disabled, whether changes be initiated.
+1. When the lifecycle administrator is ready to permit disruption, they set `pausedUntil: false`.
+1. The MCO sets the number of seconds until changes are permitted to `0`.
+1. The MCO begins to initiate worker node updates. This rollout abides by documented OpenShift constraints
+   such as the MachineConfigPool `maxUnavailable` setting.
+   
 ### API Extensions
 
 API Extensions are CRDs, admission and conversion webhooks, aggregated API servers,
@@ -483,9 +664,11 @@ In the HCP topology, the HostedCluster and NodePool resources are enhanced to su
 In the Standalone topology, the ClusterVersion and MachineConfigPool resources are enhanced to support the change management strategies
 `MaintenanceSchedule` and `Disabled`. The MachineConfigPool also supports the `Manual` strategy. 
 
-Only non-master MCPs must accept and honor the change management configuration. Non-support for change management in
-master MCPs should be documented. The MCO implementation may choose to ignore configured master change management
-policies at runtime or prevent them during admissions.
+While the master MCP in a Standalone cluster can be configured with a change management policy, updates to the 
+control-plane will ignore this policy since it is treated as a single material change to the cluster. Specifically,
+is the `osImageURL` differs between the desired and current configuration for master nodes, the change management
+policy will be ignored. For other changes, such as a systemd unit added by a user, a maintenance schedule
+can constrain its application.
 
 #### Single-node Deployments or MicroShift
 
