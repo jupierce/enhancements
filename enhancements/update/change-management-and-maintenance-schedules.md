@@ -627,12 +627,14 @@ the MachineConfigOperator will not trigger the MachineConfigDaemon to drain or r
    that there is presently no time in the future where it will initiate material changes. The operations team
    has an alert configured if this value `!= -1`.
 1. The MCO metric for the MCP indicating that changes are pending is set because not all nodes are running
-   the most recently rendered configuration. This is irrespective of the `desiredConfig` in the `manual` 
+   the most recently rendered configuration. This is irrespective of the `desiredConfig` in the `assisted` 
    policy. Abstractly, it means, if change management were disabled, whether changes be initiated.
 1. When the lifecycle administrator is ready to permit disruption, they set `pausedUntil: false`.
 1. The MCO sets the number of seconds until changes are permitted to `0`.
 1. The MCO begins to initiate worker node updates. This rollout abides by documented OpenShift constraints
    such as the MachineConfigPool `maxUnavailable` setting.
+1. Though new rendered configurations may be created, the assisted strategy will not act until the assisted policy
+   is updated to specify a new desiredConfig.
    
 ### API Extensions
 
@@ -662,7 +664,7 @@ In the HCP topology, the HostedCluster and NodePool resources are enhanced to su
 #### Standalone Clusters
 
 In the Standalone topology, the ClusterVersion and MachineConfigPool resources are enhanced to support the change management strategies
-`MaintenanceSchedule` and `Disabled`. The MachineConfigPool also supports the `Manual` strategy. 
+`MaintenanceSchedule` and `Disabled`. The MachineConfigPool also supports the `Manual` and `Assisted` strategies. 
 
 While the master MCP in a Standalone cluster can be configured with a change management policy, updates to the 
 control-plane will ignore this policy since it is treated as a single material change to the cluster. Specifically,
@@ -939,12 +941,52 @@ Describe how to
 
 ## Alternatives
 
-Similar to the `Drawbacks` section the `Alternatives` section is used
-to highlight and record other possible approaches to delivering the
-value proposed by an enhancement, including especially information
-about why the alternative was not selected.
+### Do not separate control-plane and worker-node updates into separate phases
+As separating control-plane and worker-node updates into separate phases is an important motivation for this
+enhancement, we could abandon this strategic direction. Reasons motivating this separation are explained 
+in depth in the motivation section.
 
-## Infrastructure Needed [optional]
+### Separate control-plane and worker-node updates into separate phases, but do not implement the change control concept
+As explained in the motivation section, there is a concern that implementing this separation without
+maintenance schedules will double the perceived operational overhead of OpenShift updates. 
 
-Use this section if you need things from the project. Examples include a new
-subproject, repos requested, github details, and/or testing infrastructure.
+This also creates work for our Service Delivery team without any platform support.
+
+### Separate control-plane and worker-node updates into separate phases, but implement a simpler MaintenanceSchedule strategy
+We could implement change control without `disabledUntil`, `pausedUntil`, `exclude`, and perhaps more. However,
+it is risky to impose a single opinionated workflow onto the wide variety of consumers of the platform. The workflows
+described in this enhancement are not intended to be exotic or contrived but situations in which flexibility
+in our configuration can achieve real world, reasonable goals. 
+
+`disabledUntil` is designed to support our Service Delivery team who, on occasion, will need
+to be able to bypass configured change controls. The feature is easy to use, does not require 
+deleting or restoring customer configuration (which may be error-prone), and can be safely 
+"forgotten" after being set to a date in the future.
+
+`pausedUntil`, among other interesting possibilities, offers a cluster lifecycle administrator the ability
+to stop a problematic update from unfolding further. You may have watched a 100 node
+cluster roll out a bad configuration change without knowing exactly how to stop the damage
+without causing further disruption. This is not a moment when you want to be figuring out how to format
+a date string, calculating timezones, or copying around cluster configuration so that you can restore
+it after you stop the bleeding.
+
+### Implement change control, but do not implement the Manual and/or Assisted strategy for MachineConfigPool
+Major enterprise users of our software do not update on a predictable, recurring window of time. Updates
+require laborious certification processes and testing. Maintenance schedules will not serve these customers
+well. However, these customers may still benefit significantly from the change management concept --
+unexpected / disruptive worker node drains and reboots have bitten even experienced OpenShift operators
+(e.g. a new MachineConfig being contributed via gitops).
+
+These strategies inform decision-making through metrics and provide facilities for fine-grained control 
+over exactly when material change is rolled out to a cluster. 
+
+The Assisted strategy is also specifically designed to provide a foundation for 
+the forthcoming `oc adm update worker-nodes` verbs. After separating the control-plane and
+worker-node update phases, these verbs are intended to provide cluster lifecycle administrators the 
+ability to easily start, pause, cancel, and even rollback worker-node changes.
+
+Making accommodations for these strategies should be a subset of the overall implementation
+of the MaintenanceSchedule strategy and they will enable a foundation for a range of 
+different persons not served by MaintenanceSchedule.
+
+
