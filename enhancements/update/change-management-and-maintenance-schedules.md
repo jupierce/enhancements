@@ -10,7 +10,8 @@ approvers:
   - @sdodson
 api-approvers: 
   - @mrunalp, MCP API Changes.
-  - @sjenning, HyperShift API Changes.
+  - @sjenning, HostedCluster an NodePool API Changes.
+  - @LalatenduMohanty, ClusterVersion API Changes.
   - @jharrington22, SD Integration.
 creation-date: 2024-02-29
 last-updated: 2024-02-29
@@ -356,15 +357,24 @@ Conversely, material changes CAN take place on the control-plane when permitted 
 change management policy even while material changes are not being permitted by worker-nodes 
 policies.
 
+| control-plane           | worker-node               | results                                                                                                                                                                                            |
+|-------------------------|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| disabled                | disabled                  | Traditional, fully self-managed change rollouts. Material changes can be initiated immediately upon configuration change. |
+| enabled (any strategy)  | disabled                  | Changes to both the control-plane and worker-nodes are constrained by the control-plane strategy. |
+| disabled                | enabled (any strategy)    | Material changes can be initiated immediately on the control-plane. Material changes on worker-nodes are subject to the worker-node policy. |
+| enabled (any strategy)  | enabled (any strategy)    | Material changes to the control-plane are subject to change control strategy for the control-plane. Material changes to the worker-nodes are subject to **both** the control-plane and worker-node strategies - if either precludes material change initiation, changes are left pending. |
+
+
+
 ### Change Management Strategies
-Each resource bearing the `changeManagement` stanza must support two or more change management strategies.
+Each resource bearing the `changeManagement` stanza must support a minimal set of change management strategies.
 Each strategy may require an additional configuration element within the stanza. For example:
 ```yaml
 spec:
   changeManagement:
     strategy: "MaintenanceSchedule"
     maintenanceSchedule:
-      ..options to configure a policy for the maintenance schedule..
+      ..options to configure a detailed policy for the maintenance schedule..
 ```
 
 All change management implementations must support `Disabled` and `MaintenanceSchedule`. Abstracting 
@@ -377,8 +387,17 @@ management strategy configured, they can simply set `strategy: Disabled` without
 `maintenanceSchedule` stanza which configures the previous strategy. Once the correct action has been completed,
 SRE simply restores `strategy: MaintenanceSchedule` and the previous configuration begins to be enforced.
 
-Configurations for different management strategies can be recorded in the `changeManagement` stanza, but
+Configurations for multiple management strategies can be recorded in the `changeManagement` stanza, but
 only one strategy can be selected as the active strategy at a given time.
+
+All change management strategies, except `Disabled` are expected to implement a `disabledUntil: <bool|date>` 
+configuration option. When `disabledUntil: true` or `disabledUntil: <future-date>`, for the active
+strategy, the **effective** active strategy for change management is `Disabled`. Setting a future date
+in `disabledUntil` offers a less invasive (i.e. no important configuration needs to be changed) method to 
+disable change management constraints (e.g. if it is critical to roll out a fix) and a method that
+does not need to be reverted (i.e. it will naturally expire after the specified date and the configured
+change management strategy will re-activate).
+
 
 #### Maintenance Schedule Strategy
 The maintenance schedule strategy is supported by all resources which support change management. The strategy
@@ -698,14 +717,42 @@ only permit and exclude times.
 
 
 #### Metrics
-For each resource bearing the change management stanza, the following metrics should be exposed:
-  - The number of seconds until changes can be initiated according to the active change management strategy configuration. -1 if there is an indefinite pause. -2 if there is a problem calculating the next available window.
-  - `1` if changes are pending for this resource. The metric should have a `type` label indicating which type of change is pending (the CVO can have knowledge of pending control-plane and MachineConfig changes). `0` if no changes are pending. 
-  - `1` if there is any enabled change strategy or `0` if `strategy: Disabled`, `null`, `disabledUntil: true`, `disabledUntil: <future date>` .  
-  - For each supported strategy:
-    - `1` if the strategy the configured strategy (irrespective of being disabled).
 
-Alerts to help identify skew?
+##### MachineConfigOperator Metrics
+`cm_change_pending`
+Labels:
+- kind=ClusterVersion|MachineConfigPool|HostedCluster|NodePool
+- object=<object-name>
+- system=<control-plane|worker-nodes>
+Value: 
+- `0`: no material changes are pending.
+- `1`: changes are pending but being initiated.
+- `2`: changes are pending and blocked based on this resource's change management policy.
+- `3`: changes are pending and blocked based on another resource in the change management hierarchy.
+
+`cm_change_eta`
+Labels:
+- kind=ClusterVersion|MachineConfigPool|HostedCluster|NodePool
+- object=<object-name>
+- system=<control-plane|worker-nodes>
+Value: 
+- `-2`: Error determining the time at which changes can be initiated (e.g. cannot check with ClusterVersion / change management hierarchy).
+- `-1`: Material changes are paused indefinitely OR no permissive window can be found within the next 1000 days (the latter ensures a brute force check of intersecting datetimes with hierarchy RRULEs is a valid method of calculating intersection).
+- `0`: Any pending changes can be initiated now (e.g. change management is disabled or inside machine schedule window).
+- `> 0`: The number seconds remaining until changes can be initiated. 
+
+`cm_strategy_enabled`
+Labels:
+- kind=ClusterVersion|MachineConfigPool|HostedCluster|NodePool
+- object=<object-name>
+- system=<control-plane|worker-nodes>
+- strategy=MaintenanceSchedule|Manual|Assisted
+Value: 
+- `0`: Change management for this resource is not subject to this enabled strategy (**does** consider hierarchy).
+- `1`: Change management for this resource is directly subject to this enabled strategy.
+- `2`: Change management for this resource is indirectly subject to this enabled strategy (only through hierarchy).
+- `3`: Change management for this resource is directly and indirectly subject to this enabled strategy.
+
 
 ### Risks and Mitigations
 
