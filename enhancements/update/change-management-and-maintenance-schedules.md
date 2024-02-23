@@ -414,16 +414,9 @@ a active strategy in the control-plane resource being in the "paused" state.
 
 #### Maintenance Schedule Strategy
 The maintenance schedule strategy is supported by all resources which support change management. The strategy
-allows a cluster lifecycle administrator to express one of the following semantically:
-
-| pausedUntil    | permit | exclude | outcome                                                                                                                                                                                  |
-|----------------|--------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `null`/`false` | `null` | `null`  | Material changes are permitted at any time.                                                                                                                                              |
-| `true`         | *      | *       | Material changes are paused indefinitely.                                                                                                                                                |
-| `null`/`false` | set    | `null`  | Material changes are permitted in specified reoccurring windows.                                                                                                                          |
-| `null`/`false` | set    | set     | Material changes are permitted in specified reoccurring windows except for specific excluded dates.                                                                                       |
-| `null`/`false` | `null` | set     | Material changes are permitted except during excluded dates.                                                                                                                             |
-| date           | *      | *       | Honor permit and exclude values, but only after the specified date. For example, permit: `null` and exclude: `null` implies any material changes are permitted after the specified date. |
+is configured by specifying an RRULE identifying permissive datetimes during which material changes can be
+initiated. The cluster lifecycle administrator can also exclude specific date ranges, during which 
+material changes will be paused.
 
 #### Disabled Strategy
 This strategy indicates that no change management strategy is being enforced by the resource. It always implies that
@@ -654,22 +647,22 @@ perspective, this strategy reports as paused indefinitely.
 1. The cluster workloads are not HA and unplanned drains are considered a business risk.
 1. To prevent surprises, the cluster lifecycle administrator sets the Assisted strategy on the worker MCP.
 1. In the `assisted` strategy change management policy, the lifecycle administrator configures `pausedUntil: true`
-   and the most recently rendered worker configuration in the policy's `desiredConfig`.
-1. The MCO is being asked to ignite any new node or any rebooted node with the desired configuration. However,
-   becaused of `pausedUntil: true`, it is also being asked not to automatically initiate that material change
-   for existing nodes.
+   and the most recently rendered worker configuration in the policy's `renderedConfigsBefore: <current datetime>`.
+1. The MCO is being asked to ignite any new node or any rebooted node with the latest rendered configuration
+   before the present datetime. However, because of `pausedUntil: true`, it is also being asked not to 
+   automatically initiate that material change for existing nodes.
 1. The MCO metric for the MCP indicating the number of seconds remaining until changes can be initiated is `-1` - indicating
    that there is presently no time in the future where it will initiate material changes. The operations team
    has an alert configured if this value `!= -1`.
 1. The MCO metric for the MCP indicating that changes are pending is set because not all nodes are running
-   the most recently rendered configuration. This is irrespective of the `desiredConfig` in the `assisted` 
-   policy. Abstractly, it means, if change management were disabled, whether changes be initiated.
+   the most recent, rendered configuration. This is irrespective of the `renderedConfigsBefore` in the `assisted` 
+   configuration. Abstractly, it means, if change management were disabled, whether changes be initiated.
 1. When the lifecycle administrator is ready to permit disruption, they set `pausedUntil: false`.
 1. The MCO sets the number of seconds until changes are permitted to `0`.
 1. The MCO begins to initiate worker node updates. This rollout abides by documented OpenShift constraints
    such as the MachineConfigPool `maxUnavailable` setting.
 1. Though new rendered configurations may be created, the assisted strategy will not act until the assisted policy
-   is updated to specify a new desiredConfig.
+   is updated to permit a more recent creation date.
    
 ### API Extensions
 
@@ -713,7 +706,7 @@ The ClusterVersion operator will honor the change management field just as in a 
 have a MachineConfigPool, material changes the node could be controlled with a change management policy
 in that resource.
 
-#### OCM Managed Instances
+#### OCM Managed Profiles
 OpenShift Cluster Manager (OCM) should expose a user interface allowing users to manage their change management policy.
 Standard Fleet clusters will expose the option to configure the MaintenanceSchedule strategy - including
 only permit and exclude times.
@@ -733,8 +726,13 @@ spec:
     # The active strategy for change management (unless disabled by disabledUntil).
     strategy: <strategy-name|Disabled|null>
     
-    # If set to true or a future date, the effective change management strategy is Disabled.
+    # If set to true or a future date, the effective change management strategy is Disabled. Date 
+    # must be RFC3339. 
     disabledUntil: <bool|date|null>
+    
+    # If set to true or a future date, all strategies other than Disabled are paused. Date 
+    # must be RFC3339. 
+    pausedUntil: <bool|date|null>    
     
     # If a strategy needs additional configuration information, it can read a 
     # key bearing its name in the config stanza.
@@ -771,7 +769,7 @@ spec:
           # Non-inclusive until. If null, until defaults to the day after from (meaning a single day exclusion).
           untilDate: <date|null>
 
-        # Specifies an ISO 8601 style timezone offset to be applied across their datetime selections.
+        # Specifies an RFC3339 style timezone offset to be applied across their datetime selections.
         # "-07:00" indicates negative 7 hour offset from UTC. "+03:00" indicates positive 3 hour offset. If not set, defaults to "+00:00" (UTC). 
         timezoneOffset: <null|str>
 
@@ -802,10 +800,65 @@ A valid RRULE for change management:
   supported.
 - cannot specify a permissive window more than 2 years away.
 
+**Overview of Interactions**
+The MaintenanceSchedule strategy, along with `changeManagement.pausedUntil` allows a cluster lifecycle administrator to express 
+one of the following:
+
+| pausedUntil    | permit | exclude | Enforcement State (Note that **effective** state must also take into account hierarchy)                                                                                                                                                                                  |
+|----------------|--------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `null`/`false` | `null` | `null`  | Permissive indefinitely           |
+| `true`         | *      | *       | Paused indefinitely |
+| `null`/`false` | set    | `null`  | Permissive during reoccurring windows time. Paused at all other times.                                                                                                                  |
+| `null`/`false` | set    | set     | Permissive during reoccurring windows time modulo excluded date ranges during which it is paused. Paused at all other times.                                                                                                                                                                                                         |
+| `null`/`false` | `null` | set     | Permissive except during excluded dates during which it is paused.                                                                                                                             |
+| date           | *      | *       | Honor permit and exclude values, but only after the specified date. For example, permit: `null` and exclude: `null` implies the strategy is indefinitely permissive after the specified date. |
+
+
+#### MachineConfigPool Assisted Strategy Configuration
+
+```yaml
+spec:
+  changeManagement:
+    strategy: Assisted
+    config:
+      assisted:
+        permit:
+          # The assisted strategy will allow the MCO to process any rendered configuration
+          # that was created before the specified datetime. 
+          renderedConfigsBefore: <datetime>
+          # When AllowSettings, rendered configurations after the preceding before date
+          # can be applied if and only if they do not contain changes to osImageURL.
+          policy: "AllowSettings|AllowNone"
+```
+
+The primary user of this strategy is `oc` with tentatively planned enhancements to include verbs 
+like:
+```sh
+$ oc adm update worker-nodes start ...
+$ oc adm update worker-nodes pause ...
+$ oc adm update worker-nodes rollback ...
+```
+
+These verbs can leverage the assisted strategy and `pausedUntil` to allow the manual initiation of worker-nodes
+updates after a control-plane update. 
+
+#### MachineConfigPool Manual Strategy Configuration
+
+```yaml
+spec:
+  changeManagement:
+    strategy: Manual
+    config:
+      manual:
+        desiredConfig: <rendered-configuration-name>
+```
+
+The manual strategy requests no automated initiation of updates. New and rebooting
+nodes will only receive the desired configuration. From a metrics perspective, this strategy
+is always paused state.
 
 #### Metrics
 
-##### MachineConfigOperator Metrics
 `cm_change_pending`
 Labels:
 - kind=ClusterVersion|MachineConfigPool|HostedCluster|NodePool
@@ -840,6 +893,23 @@ Value:
 - `2`: Change management for this resource is indirectly subject to this enabled strategy (i.e. only via control-plane override hierarchy).
 - `3`: Change management for this resource is directly and indirectly subject to this enabled strategy.
 
+#### Change Management Status
+Each resource which exposes a `.spec.changeManagement` stanza should also expose `.status.changeManagement` . 
+
+```yaml
+status:
+  changeManagement:
+    # Always show control-plane level strategy. Disabled if disabledUntil is true.
+    clusterStrategy: <Disabled|MaintenanceSchedule>
+    # If this a worker-node related resource (e.g. MCP), show local strategy. Disabled if disabledUntil is true.
+    workerNodeStrategy: <Disabled|MaintenanceSchedule|Manual|Assisted>
+    # Show effective state.
+    effectiveState: <Changes Paused|Changes Permitted>
+    description: "Human readable message explaining how strategies & configuration are resulting in the effective state."
+    # The start of the next permissive window, taking into account the hierarchy. "N/A" for indefinite pause or >1000 days.
+    permitChangesETA: <datetime>
+    changesPending: <Yes|No>
+```
 
 ### Risks and Mitigations
 
@@ -859,7 +929,7 @@ code paths prove challenging.
 ## Open Questions [optional]
 
 1. Can the HyperShift Operator expose a metric expose a metric for when changes are pending for a subset of worker nodes on the cluster if it can only interact via CAPI resources?
-2. 
+2. Can the MCO interrogate the ClusterVersion change management configuration in order to calculate overlapping permissive intervals in the future?
 
 ## Test Plan
 
