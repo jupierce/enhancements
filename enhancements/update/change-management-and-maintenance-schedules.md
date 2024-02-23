@@ -694,12 +694,6 @@ In the HCP topology, the HostedCluster and NodePool resources are enhanced to su
 In the Standalone topology, the ClusterVersion and MachineConfigPool resources are enhanced to support the change management strategies
 `MaintenanceSchedule` and `Disabled`. The MachineConfigPool also supports the `Manual` and `Assisted` strategies. 
 
-While the master MCP in a Standalone cluster can be configured with a change management policy, updates to the 
-control-plane will ignore this policy since it is treated as a single material change to the cluster. Specifically,
-is the `osImageURL` differs between the desired and current configuration for master nodes, the change management
-policy will be ignored. For other changes, such as a systemd unit added by a user, a maintenance schedule
-can constrain its application.
-
 #### Single-node Deployments or MicroShift
 
 The ClusterVersion operator will honor the change management field just as in a standalone profile. If those profiles
@@ -910,6 +904,53 @@ status:
     permitChangesETA: <datetime>
     changesPending: <Yes|No>
 ```
+
+#### Change Management Bypass Annotation
+In some situations, it may be necessary for a MachineConfig to be applied regardless of the active change
+management policy for a MachineConfigPool. In such cases, `machineconfiguration.openshift.io/bypass-change-management`
+can be set to any non-empty string. The MCO will progress until MCPs which select annotated
+MachineConfigs have all machines running with a desiredConfig containing that MachineConfig's current state.
+
+This annotation will be present on `00-master` to ensure that, once the CVO updates the MachineConfig,
+the remainder of the control-plane update will be treated as a single material change.
+
+### Special Handling
+These cases are mentioned elsewhere in relative documentation sections, but they deserve review.
+
+#### Change Management on Master MachineConfigPool
+In order to allow control-plane updates as a single material change, the MCO will only honor change the management configuration for the 
+master MachineConfigPool if user generated MachineConfigs are the cause for a pending change. To accomplish this, 
+at least one MachineConfig updated by the CVO will have the `machineconfiguration.openshift.io/bypass-change-management` annotation
+indicating that changes in the MachineConfig must be acted upon irrespective of the master MCP change management policy. 
+
+#### Limiting Overlapping Window Search / Permissive Window Calculation
+An operator implementing change management for a worker-node related resource must honor the change management hierarchy when
+calculating when the next permissive window will occur (called elsewhere in the document, ETA). This is not
+straightforward to compute when both the control-plane and worker-nodes have independent MaintenanceSchedule 
+configurations.
+
+We can, however, simplify the process by reducing the number of days in the future the algorithm must search for
+coinciding permissive windows. 1000 days is a proposed cut-off.
+
+To calculate coinciding windows then, the implementation can use [rrule-go](https://github.com/teambition/rrule-go) 
+to iteratively find permissive windows at the cluster / control-plane level. These can be added to an 
+[interval-tree](https://github.com/rdleal/intervalst) . As dates are added, rrule calculations for the worker-nodes
+can be performed. The interval-tree should be able to efficiently determine whether there is an
+intersection between the permissive intervals it has stored for the control-plane and the time range tested for the 
+worker-nodes.
+
+Since it is possible there is no overlap, limits must be placed on this search. Once dates >1000 days from
+the present moment are being tested, the operator can behave as if an indefinite pause has been requested.
+
+This outcome does not need to be recomputed unless the operator restarts Or one of the rrules involved
+is modified.
+
+If an overlap _is_ found, no additional intervals need to be added to the tree and it can be discarded.
+The operator can store the start & end datetimes for the overlap and count down the seconds remaining 
+until it occurs. Obviously, this calculation must be repeated:
+1. If either MaintenanceSchedule configuration is updated.
+1. The operator is restarted.
+1. At the end of a permissive window, in order to determine the next permissive window.
 
 ### Risks and Mitigations
 
