@@ -41,7 +41,7 @@ but it does prevent _additional_ material changes from being initiated.
 
 A "material change" may vary by cluster profile and subsystem. For example, a 
 control-plane update (all components and control-plane nodes updated) is implemented as
-a single material change (e.g. the close of a scheduled maintenance window
+a single material change (e.g. the close of a scheduled permissive window
 will not suspend its progress). In contrast, the rollout of worker-node updates is
 more granular (you can consider it as many individual material changes) and  
 the end of a permitted change window will prevent additional worker-node updates 
@@ -225,12 +225,12 @@ risks and disruption when rolling out changes to their environments.
 > reduce the impact of any service disruption."
 
 > "As a cluster lifecycle administrator, I want to ensure that no material changes to my 
-> cluster occurs during a known date range even if it falls within our
+> cluster occur during a known date range even if it falls within our
 > normal maintenance schedule due to an anticipated atypical usage (e.g. Black Friday)."
 
-> "As a cluster lifecycle administrator, I want to suspend additional material changes from 
+> "As a cluster lifecycle administrator, I want to pause additional material changes from 
 > taking place when it is no longer practical to monitor for service disruptions. For example,
-> if a worker-node update is proving to be problematic during a valid maintenance window, I would
+> if a worker-node update is proving to be problematic during a valid permissive window, I would
 > like to be able to pause that change manually so that the team will not have to work on the weekend."
 
 > "As a cluster lifecycle administrator, I need to stop all material changes on my cluster
@@ -255,8 +255,8 @@ risks and disruption when rolling out changes to their environments.
 > across our fleet, I want to be able to bypass and then restore customer maintenance schedules
 > with minimal technical overhead."
 
-> "As a cluster lifecycle administrator who is well served by a fully managed update without maintenance windows, 
-> I want to be minimally inconvenienced by the introduction of maintenance schedules."
+> "As a cluster lifecycle administrator who is well served by a fully managed update without change management, 
+> I want to be minimally inconvenienced by the introduction of change management / maintenance schedules."
 
 > "As a cluster lifecycle administrator who is not well served by a fully managed update and needs exacting 
 > control over when material changes occur on my cluster where opportunities do NOT arise at reoccurring intervals,
@@ -274,7 +274,7 @@ risks and disruption when rolling out changes to their environments.
 > enforced on my cluster by looking at the status of relevant API resources or metrics."
 
 > "As a cluster lifecycle administrator, I want to be able to alert my operations team when changes are pending,
-> when and the number of seconds to the next permitted window approaches, or when a maintenance window is not being
+> when and the number of seconds to the next permitted window approaches, or when a maintenance schedule is not being
 > enforced on my cluster."
 
 > "As a cluster lifecycle administrator, I want to be able to diagnose why pending changes have not been applied
@@ -324,6 +324,48 @@ initiated due to a change management control will be called "pending". Subsystem
 for initiating pending changes will await a permitted window according to the change's
 relevant `changeManagement` configuration(s).
 
+### Change Management Strategies
+Each resource supporting change management will add the `changeManagement` stanza and support a minimal set of change management strategies.
+Each strategy may require an additional configuration element within the stanza. For example:
+```yaml
+spec:
+  changeManagement:
+    strategy: "MaintenanceSchedule"
+    pausedUntil: false
+    disabledUntil: false
+    config:
+       maintenanceSchedule:
+         ..options to configure a detailed policy for the maintenance schedule..
+```
+
+All change management implementations must support `Disabled` and `MaintenanceSchedule`. Abstracting 
+change management into strategies allows for simplified future expansion or deprecation of strategies. 
+Tactically, `strategy: Disabled` provides a convenient syntax for bypassing any configured 
+change management policy without permanently deleting its configuration.
+
+For example, if SRE needs to apply emergency corrective action on a cluster with a `MaintenanceSchedule` change
+management strategy configured, they can simply set `strategy: Disabled` without having to delete the existing
+`maintenanceSchedule` stanza which configures the previous strategy. Once the correct action has been completed,
+SRE simply restores `strategy: MaintenanceSchedule` and the previous configuration begins to be enforced.
+
+Configurations for multiple management strategies can be recorded in the `config` stanza, but
+only one strategy can be active at a given time.
+
+Each strategy will support a policy for pausing or unpausing (permitting) material changes from being initiated. 
+This will be referred to as the strategy's enforcement state (or just "state"). The enforcement state for a
+strategy can be either "paused" or "unpaused" (a.k.a. "permissive"). The `Disabled` strategy enforcement state 
+is always permissive -- allowing material changes to be initiated (see [Change Management
+Hierarchy](#change-management-hierarchy) for caveats).
+
+All change management strategies, except `Disabled`, are subject to the following `changeManagement` fields:
+- `changeManagement.disabledUntil: <bool|date>`: When `disabledUntil: true` or `disabledUntil: <future-date>`, the interpreted strategy for 
+  change management in the resource is `Disabled`. Setting a future date in `disabledUntil` offers a less invasive (i.e. no important configuration needs to be changed) method to 
+  disable change management constraints (e.g. if it is critical to roll out a fix) and a method that
+  does not need to be reverted (i.e. it will naturally expire after the specified date and the configured
+  change management strategy will re-activate).
+- `changeManagement.pausedUntil: <bool|date>`: Unless the effective active strategy is Disabled, `pausedUntil: true` or `pausedUntil: <future-date>`, change management must 
+  pause material changes.
+
 ### Change Management Status
 Change Management information will also be reflected in resource status. Each resource 
 which contains the stanza in its `spec` will expose its current impact in its `status`. 
@@ -341,8 +383,8 @@ containing the stanza should expose the following metrics:
 ### Change Management Hierarchy
 Material changes to worker-nodes are constrained by change management policies in their associated resource AND 
 at the control-plane resource. For example, in a standalone profile, if a MachineConfigPool's change management
-policy apparently permitted material change in isolation, if material changes were not permitted by a change management
-policy in the ClusterVersion resource, changes for the MachineConfigPool will not be initiated.
+configuration apparently permits material changes from being initiated at a given moment, that is only the case 
+if ClusterVersion is **also** permitting changes from being initiated at that time.
 
 The design choice is informed by a thought experiment: As a cluster lifecycle administrator for a Standalone cluster,
 who wants to achieve the simple goal of ensuring no material changes take place outside of a well defined 
@@ -357,47 +399,18 @@ Conversely, material changes CAN take place on the control-plane when permitted 
 change management policy even while material changes are not being permitted by worker-nodes 
 policies.
 
-| control-plane           | worker-node               | results                                                                                                                                                                                            |
-|-------------------------|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| disabled                | disabled                  | Traditional, fully self-managed change rollouts. Material changes can be initiated immediately upon configuration change. |
-| enabled (any strategy)  | disabled                  | Changes to both the control-plane and worker-nodes are constrained by the control-plane strategy. |
-| disabled                | enabled (any strategy)    | Material changes can be initiated immediately on the control-plane. Material changes on worker-nodes are subject to the worker-node policy. |
-| enabled (any strategy)  | enabled (any strategy)    | Material changes to the control-plane are subject to change control strategy for the control-plane. Material changes to the worker-nodes are subject to **both** the control-plane and worker-node strategies - if either precludes material change initiation, changes are left pending. |
+It is thus occasionally necessary to distinguish a resource's **configured** vs **effective** change management
+state. There are two states: "paused" and "unpaused" (a.k.a. permissive; meaning that material changes be initiated). 
+For a control-plane resource, the configured and effective enforcement states are always the same. For worker-node
+resources, the configured strategy may be disabled, but the effective enforcement state can be "paused" due to 
+a active strategy in the control-plane resource being in the "paused" state.
 
-
-
-### Change Management Strategies
-Each resource bearing the `changeManagement` stanza must support a minimal set of change management strategies.
-Each strategy may require an additional configuration element within the stanza. For example:
-```yaml
-spec:
-  changeManagement:
-    strategy: "MaintenanceSchedule"
-    maintenanceSchedule:
-      ..options to configure a detailed policy for the maintenance schedule..
-```
-
-All change management implementations must support `Disabled` and `MaintenanceSchedule`. Abstracting 
-change management into strategies allows for simplified future expansion or deprecation of strategies. 
-Tactically, `strategy: Disabled` provides a convenient syntax for bypassing configured 
-change management policy without permanently deleting its configuration.
-
-For example, if SRE needs to apply emergency corrective action on a cluster with a `MaintenanceSchedule` change
-management strategy configured, they can simply set `strategy: Disabled` without having to delete the existing
-`maintenanceSchedule` stanza which configures the previous strategy. Once the correct action has been completed,
-SRE simply restores `strategy: MaintenanceSchedule` and the previous configuration begins to be enforced.
-
-Configurations for multiple management strategies can be recorded in the `changeManagement` stanza, but
-only one strategy can be selected as the active strategy at a given time.
-
-All change management strategies, except `Disabled` are expected to implement a `disabledUntil: <bool|date>` 
-configuration option. When `disabledUntil: true` or `disabledUntil: <future-date>`, for the active
-strategy, the **effective** active strategy for change management is `Disabled`. Setting a future date
-in `disabledUntil` offers a less invasive (i.e. no important configuration needs to be changed) method to 
-disable change management constraints (e.g. if it is critical to roll out a fix) and a method that
-does not need to be reverted (i.e. it will naturally expire after the specified date and the configured
-change management strategy will re-activate).
-
+| control-plane state     | worker-node state         | worker-node effective state | results                                                                                                                                                                                            |
+|-------------------------|---------------------------|-----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| unpaused                | unpaused                  | unpaused                    | Traditional, fully self-managed change rollouts. Material changes can be initiated immediately upon configuration change. |
+| paused (any strategy)   | **unpaused**              | **paused**                  | Changes to both the control-plane and worker-nodes are constrained by the control-plane strategy. |
+| unpaused                | paused (any strategy)     | paused                      | Material changes can be initiated immediately on the control-plane. Material changes on worker-nodes are subject to the worker-node policy. |
+| paused (any strategy)   | paused (any strategy)     | paused                      | Material changes to the control-plane are subject to change control strategy for the control-plane. Material changes to the worker-nodes are subject to **both** the control-plane and worker-node strategies - if either precludes material change initiation, changes are left pending. |
 
 #### Maintenance Schedule Strategy
 The maintenance schedule strategy is supported by all resources which support change management. The strategy
@@ -407,15 +420,16 @@ allows a cluster lifecycle administrator to express one of the following semanti
 |----------------|--------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `null`/`false` | `null` | `null`  | Material changes are permitted at any time.                                                                                                                                              |
 | `true`         | *      | *       | Material changes are paused indefinitely.                                                                                                                                                |
-| `null`/`false` | set    | `null`  | Material changes are permitted in specified reocurring windows.                                                                                                                          |
-| `null`/`false` | set    | set     | Material changes are permitted in specified reocurring windows except for specific excluded dates.                                                                                       |
+| `null`/`false` | set    | `null`  | Material changes are permitted in specified reoccurring windows.                                                                                                                          |
+| `null`/`false` | set    | set     | Material changes are permitted in specified reoccurring windows except for specific excluded dates.                                                                                       |
 | `null`/`false` | `null` | set     | Material changes are permitted except during excluded dates.                                                                                                                             |
 | date           | *      | *       | Honor permit and exclude values, but only after the specified date. For example, permit: `null` and exclude: `null` implies any material changes are permitted after the specified date. |
 
 #### Disabled Strategy
-This strategy indicates that no change management strategy is being enforced by the resource. This does not always
-mean that material change is permitted due to change management hierarchies. For example, a MachineConfigPool
-with `strategy: Disabled` would still be subject to a `strategy: MaintenanceWindow` in the ClusterVersion resource.
+This strategy indicates that no change management strategy is being enforced by the resource. It always implies that
+the enforcement state at the resource level is unpaused / permissive. This does not always
+mean that material changes are permitted due to change management hierarchies. For example, a MachineConfigPool
+with `strategy: Disabled` would still be subject to a `strategy: MaintenanceStrategy` in the ClusterVersion resource.
 
 #### Assisted Strategy - MachineConfigPool
 Minimally, this strategy will be supported by MachineConfigPool. If and when the strategy is supported by other
@@ -433,8 +447,8 @@ concepts of control-plane vs worker-node updates in Standalone environments sinc
 
 In short (details will follow in the implementation section), the assisted strategy allows users to specify the
 exact rendered [`desiredConfig` the MachineConfigPool](https://github.com/openshift/machine-config-operator/blob/5112d4f8e562a2b072106f0336aeab451341d7dc/docs/MachineConfigDaemon.md#coordinating-updates) should be advertising to the MachineConfigDaemon on
-nodes it is associated with. Like the `MaintenanceSchedule` strategy, it also exposes a `pausedUntil`
-property.
+nodes it is associated with. Like the `MaintenanceSchedule` strategy, it also respects the `pausedUntil`
+field.
 
 #### Manual Strategy - MachineConfigPool
 Minimally, this strategy will be supported by MachineConfigPool. If and when the strategy is supported by other
@@ -446,6 +460,8 @@ of control-plane and worker-nodes. The MachineConfigPool Manual strategy allows 
 their `desiredConfig` to be used for ignition of new and rebooting nodes. While the Manual strategy is enabled,
 the MachineConfigOperator will not trigger the MachineConfigDaemon to drain or reboot nodes automatically.
 
+Because the Manual strategy initiates changes on its own behalf, `pausedUntil` has no effect. From a metrics
+perspective, this strategy reports as paused indefinitely.
 
 ### Workflow Description
 
@@ -589,7 +605,7 @@ the MachineConfigOperator will not trigger the MachineConfigDaemon to drain or r
    configured maintenance schedule permits the material change from being initiated by the MachineConfigOperator
    or (b) having SRE override the maintenance schedule and permitting its immediate application.   
 1. The problem is not pervasive, so the customer chooses the deferred remediation. 
-1. The change is initiated and nodes are rebooted during the next permitted maintenance window.
+1. The change is initiated and nodes are rebooted during the next permissive window.
 
 
 #### On-prem Standalone GitOps Change Management Scenario
@@ -703,17 +719,88 @@ Standard Fleet clusters will expose the option to configure the MaintenanceSched
 only permit and exclude times.
 
 - Service Delivery will reserve the right to disable this strategy for emergency corrective actions.
-- Service Delivery should constrain permit & exclude configurations based on their internal policies. For example, customers may be forced to enable maintenance windows amount to at least 6 hours a month.
+- Service Delivery should constrain permit & exclude configurations based on their internal policies. For example, customers may be forced to enable permissive windows which amount to at least 6 hours a month.
 
 ### Implementation Details/Notes/Constraints
 
+#### ChangeManagement Stanza
+The change management stanza will be introduced into ClusterVersion and MachineConfigPool (for standalone profiles)
+and HostedCluster and NodePool (for HCP profiles). The structure of the stanza is:
 
+```yaml
+spec:
+  changeManagement:
+    # The active strategy for change management (unless disabled by disabledUntil).
+    strategy: <strategy-name|Disabled|null>
+    
+    # If set to true or a future date, the effective change management strategy is Disabled.
+    disabledUntil: <bool|date|null>
+    
+    # If a strategy needs additional configuration information, it can read a 
+    # key bearing its name in the config stanza.
+    config:
+       <strategy-name>:
+         ...configuration policy for the strategy...
+```
 
+#### MaintenanceSchedule Strategy Configuration
 
+```yaml
+spec:
+  changeManagement:
+    strategy: MaintenanceSchedule
+    config:
+       maintenanceSchedule:
+        # Specifies a reoccurring permissive window. 
+        permit:  
+          # RRULEs (https://www.rfc-editor.org/rfc/rfc5545#section-3.3.10) are commonly used 
+          # for calendar management metadata. Only a subset of the RFC is supported. If
+          # unset, all dates are permitted and only exclude constrains permissive windows.
+          recurrence: <rrule|null>
+          # Given the identification of a date by an RRULE, at what time (relative to timezoneOffset) can the 
+          # permissive window begin. "00:00" if unset.
+          startTime: <time-of-day|null>
+          # Given the identification of a date by an RRULE, at what time (relative to timezoneOffset) should the 
+          # permissive window end. "23:59:59" if unset.
+          endTime: <time-of-day|null>
+        
+        # Excluded date ranges override RRULE selections.
+        exclude:
+        # Dates should be specified in YYYY-MM-DD. Each date is excluded from 00:00<timezoneOffset> for 24 hours.
+        - fromDate: <date>
+          # Non-inclusive until. If null, until defaults to the day after from (meaning a single day exclusion).
+          untilDate: <date|null>
 
+        # Specifies an ISO 8601 style timezone offset to be applied across their datetime selections.
+        # "-07:00" indicates negative 7 hour offset from UTC. "+03:00" indicates positive 3 hour offset. If not set, defaults to "+00:00" (UTC). 
+        timezoneOffset: <null|str>
 
+```
 
+Permitted times (i.e. times at which the strategy enforcement state can be permissive) are specified using a 
+subset of the [RRULE RFC5545](https://www.rfc-editor.org/rfc/rfc5545#section-3.3.10) and, optionally, a
+starting and ending time of day. https://freetools.textmagic.com/rrule-generator is a helpful tool to
+review the basic semantics RRULE is capable of expressing. https://exontrol.com/exicalendar.jsp?config=/js#calendar
+offers more complex expressions.
 
+**RRULE Interpretation**
+RRULE supports expressions that suggest recurrence without implying an exact date. For example:
+- `RRULE:FREQ=YEARLY` - An event that occurs once a year on a specific date. 
+- `RRULE:FREQ=WEEKLY;INTERVAL=2` - An event that occurs every two weeks.
+
+All such expressions shall be evaluated with a starting date of Jan 1st, 1970 00:00<timezoneOffset>. In other
+words, `RRULE:FREQ=YEARLY` would be considered permissive, for one day, at the start of each new year.
+
+If no `startTime` or `endTime` is specified, any day selected by the RRULE will suggest a
+permissive 24h window unless a date is in the `exclude` ranges.
+
+**RRULE Constraints**
+A valid RRULE for change management:
+- must identify a date, so, although RRULE supports `FREQ=HOURLY`, it will not be supported.
+- cannot specify an end for the pattern. `RRULE:FREQ=DAILY;COUNT=3` suggests
+  an event that occurs every day for three days only. As such, neither `COUNT` nor `UNTIL` is 
+  supported.
+- cannot specify a permissive window more than 2 years away.
 
 
 #### Metrics
@@ -748,9 +835,9 @@ Labels:
 - system=<control-plane|worker-nodes>
 - strategy=MaintenanceSchedule|Manual|Assisted
 Value: 
-- `0`: Change management for this resource is not subject to this enabled strategy (**does** consider hierarchy).
+- `0`: Change management for this resource is not subject to this enabled strategy (**does** consider hierarchy based disable).
 - `1`: Change management for this resource is directly subject to this enabled strategy.
-- `2`: Change management for this resource is indirectly subject to this enabled strategy (only through hierarchy).
+- `2`: Change management for this resource is indirectly subject to this enabled strategy (i.e. only via control-plane override hierarchy).
 - `3`: Change management for this resource is directly and indirectly subject to this enabled strategy.
 
 
@@ -942,3 +1029,7 @@ of the MaintenanceSchedule strategy and they will enable a foundation for a rang
 different persons not served by MaintenanceSchedule.
 
 
+### Use CRON instead of RRULE
+The CRON specification is typically used to describe when something should start and 
+does not imply when things should end. CRON also cannot, in a standard way,
+express common semantics like "The first Saturday of every month."
