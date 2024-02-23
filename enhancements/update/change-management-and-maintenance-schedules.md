@@ -915,7 +915,8 @@ This annotation will be present on `00-master` to ensure that, once the CVO upda
 the remainder of the control-plane update will be treated as a single material change.
 
 ### Special Handling
-These cases are mentioned elsewhere in relative documentation sections, but they deserve review.
+These cases are mentioned or implied elsewhere in the enhancement documentation, but they deserve special
+attention.
 
 #### Change Management on Master MachineConfigPool
 In order to allow control-plane updates as a single material change, the MCO will only honor change the management configuration for the 
@@ -942,7 +943,7 @@ worker-nodes.
 Since it is possible there is no overlap, limits must be placed on this search. Once dates >1000 days from
 the present moment are being tested, the operator can behave as if an indefinite pause has been requested.
 
-This outcome does not need to be recomputed unless the operator restarts Or one of the rrules involved
+This outcome does not need to be recomputed unless the operator restarts Or one of the RRULE involved
 is modified.
 
 If an overlap _is_ found, no additional intervals need to be added to the tree and it can be discarded.
@@ -951,6 +952,21 @@ until it occurs. Obviously, this calculation must be repeated:
 1. If either MaintenanceSchedule configuration is updated.
 1. The operator is restarted.
 1. At the end of a permissive window, in order to determine the next permissive window.
+
+
+#### Service Delivery Option Sanitization
+It is obvious that the range of flexible options provided by change management configurations offers
+can create risks for inexperienced cluster lifecycle administrators. For example, setting a 
+standalone cluster to use the Assisted strategy and failing to trigger worker-node updates will
+leave unpatched CVEs on worker-nodes much longer than necessary. It will also eventually lead to
+the need to resolve version skew (Upgradeable=False will be reported by the API cluster operator).
+
+Service Delivery understands that expose the full range of options to cluster
+lifecycle administrators could dramatically increase the overhead of managing their fleet. To
+prevent this outcome, Service Delivery will only expose a subset of the change management
+strategies. They will also implement sanitization of the configuration options a use can
+supply to those strategies. For example, a simplified interface in OCM for building a
+limited range of RRULEs that are compliant with Service Delivery's update policies.
 
 ### Risks and Mitigations
 
