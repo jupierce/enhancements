@@ -675,7 +675,7 @@ can constrain its application.
 #### Single-node Deployments or MicroShift
 
 The ClusterVersion operator will honor the change management field just as in a standalone profile. If those profiles
-have the a MachineConfigPool, material changes the node could be controlled with a change management policy
+have a MachineConfigPool, material changes the node could be controlled with a change management policy
 in that resource.
 
 #### OCM Managed Instances
@@ -688,43 +688,44 @@ only permit and exclude times.
 
 ### Implementation Details/Notes/Constraints
 
-What are some important details that didn't come across above in the
-**Proposal**? Go in to as much detail as necessary here. This might be
-a good place to talk about core concepts and how they relate. While it is useful
-to go into the details of the code changes required, it is not necessary to show
-how the code will be rewritten in the enhancement.
+
+
+
+
+
+
+
+
+
+#### Metrics
+For each resource bearing the change management stanza, the following metrics should be exposed:
+  - The number of seconds until changes can be initiated according to the active change management strategy configuration. -1 if there is an indefinite pause. -2 if there is a problem calculating the next available window.
+  - `1` if changes are pending for this resource. The metric should have a `type` label indicating which type of change is pending (the CVO can have knowledge of pending control-plane and MachineConfig changes). `0` if no changes are pending. 
+  - `1` if there is any enabled change strategy or `0` if `strategy: Disabled`, `null`, `disabledUntil: true`, `disabledUntil: <future date>` .  
+  - For each supported strategy:
+    - `1` if the strategy the configured strategy (irrespective of being disabled).
+
+Alerts to help identify skew?
 
 ### Risks and Mitigations
 
-What are the risks of this proposal and how do we mitigate. Think broadly. For
-example, consider both security and how this will impact the larger OKD
-ecosystem.
-
-How will security be reviewed and by whom?
-
-How will UX be reviewed and by whom?
-
-Consider including folks that also work outside your immediate sub-project.
+- Given the range of operators which must implement support for change management, inconsistent behavior or reporting may make it difficult for users to navigate different profiles.
+  - Mitigation: A shared library should be created and vendored for RRULE/exclude/next window calculations/metrics.
+- Users familiar with the fully self-managed nature of OpenShift are confused by the lack of material changes be initiated when change management constraints are active.
+   - Mitigation: The introduction of change management will not change the behavior of existing clusters. Users must make a configuration change.
+- Users may put themselves at risk of CVEs by being too conservative with worker-node updates.
+- Users leveraging change management may be more likely to reach unsupported kubelet skew configurations vs fully self-managed cluster management.
 
 ### Drawbacks
 
-The idea is to find the best form of an argument why this enhancement should
-_not_ be implemented.
-
-What trade-offs (technical/efficiency cost, user experience, flexibility,
-supportability, etc) must be made in order to implement this? What are the reasons
-we might not want to undertake this proposal, and how do we overcome them?
-
-Does this proposal implement a behavior that's new/unique/novel? Is it poorly
-aligned with existing user expectations?  Will it be a significant maintenance
-burden?  Is it likely to be superceded by something else in the near future?
+The scope of the enhancement - cutting across several operators requires multiple, careful implementations. The enhancement
+also touches code paths that have been refined for years which assume a fully self-managed cluster approach. Upsetting these
+code paths prove challenging. 
 
 ## Open Questions [optional]
 
-This is where to call out areas of the design that require closure before deciding
-to implement the design.  For instance,
- > 1. This requires exposing previously private resources which contain sensitive
-  information.  Can we do this?
+1. Can the HyperShift Operator expose a metric expose a metric for when changes are pending for a subset of worker nodes on the cluster if it can only interact via CAPI resources?
+2. 
 
 ## Test Plan
 
@@ -756,23 +757,13 @@ Consider the following in developing the graduation criteria for this
 enhancement:
 
 - Maturity levels
-  - [`alpha`, `beta`, `stable` in upstream Kubernetes][maturity-levels]
-  - `Dev Preview`, `Tech Preview`, `GA` in OpenShift
-- [Deprecation policy][deprecation-policy]
+The API extensions will be made to existing, stable APIs. `changeManagement` is an optional
+field in the resources which bear it and so do not break backwards compatibility.
 
-Clearly define what graduation means by either linking to the [API doc definition](https://kubernetes.io/docs/concepts/overview/kubernetes-api/#api-versioning),
-or by redefining what graduation means.
-
-In general, we try to use the same stages (alpha, beta, GA), regardless how the functionality is accessed.
-
-[maturity-levels]: https://git.k8s.io/community/contributors/devel/sig-architecture/api_changes.md#alpha-beta-and-stable-versions
-[deprecation-policy]: https://kubernetes.io/docs/reference/using-api/deprecation-policy/
-
-**If this is a user facing change requiring new or updated documentation in [openshift-docs](https://github.com/openshift/openshift-docs/),
-please be sure to include in the graduation criteria.**
-
-**Examples**: These are generalized examples to consider, in addition
-to the aforementioned [maturity levels][maturity-levels].
+The lack of a change management field implies the Disabled strategy - which ensures 
+the existing, fully self-managed update behaviors are not constrained. That is,
+under a change management strategy is configured, the behavior of existing clusters
+will not be affected.
 
 ### Dev Preview -> Tech Preview
 
@@ -798,114 +789,62 @@ end to end tests.**
 
 ### Removing a deprecated feature
 
-- Announce deprecation and support policy of the existing feature
-- Deprecate the feature
+- The `MachineConfigPool.spec.pause` can begin the deprecation process. Change Management strategies allow for a superset of its behaviors.
+- We may consider deprecating `HostCluster.spec.pausedUntil`. HyperShift may consider retaining it with the semantics of pausing all reconciliation with CAPI resources vs just pausing material changes per the change management contract.
 
 ## Upgrade / Downgrade Strategy
 
-If applicable, how will the component be upgraded and downgraded? Make sure this
-is in the test plan.
-
-Consider the following in developing an upgrade/downgrade strategy for this
-enhancement:
-- What changes (in invocations, configurations, API use, etc.) is an existing
-  cluster required to make on upgrade in order to keep previous behavior?
-- What changes (in invocations, configurations, API use, etc.) is an existing
-  cluster required to make on upgrade in order to make use of the enhancement?
-
-Upgrade expectations:
-- Each component should remain available for user requests and
-  workloads during upgrades. Ensure the components leverage best practices in handling [voluntary
-  disruption](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/). Any exception to
-  this should be identified and discussed here.
-- Micro version upgrades - users should be able to skip forward versions within a
-  minor release stream without being required to pass through intermediate
-  versions - i.e. `x.y.N->x.y.N+2` should work without requiring `x.y.N->x.y.N+1`
-  as an intermediate step.
-- Minor version upgrades - you only need to support `x.N->x.N+1` upgrade
-  steps. So, for example, it is acceptable to require a user running 4.3 to
-  upgrade to 4.5 with a `4.3->4.4` step followed by a `4.4->4.5` step.
-- While an upgrade is in progress, new component versions should
-  continue to operate correctly in concert with older component
-  versions (aka "version skew"). For example, if a node is down, and
-  an operator is rolling out a daemonset, the old and new daemonset
-  pods must continue to work correctly even while the cluster remains
-  in this partially upgraded state for some time.
-
-Downgrade expectations:
-- If an `N->N+1` upgrade fails mid-way through, or if the `N+1` cluster is
-  misbehaving, it should be possible for the user to rollback to `N`. It is
-  acceptable to require some documented manual steps in order to fully restore
-  the downgraded cluster to its previous state. Examples of acceptable steps
-  include:
-  - Deleting any CVO-managed resources added by the new version. The
-    CVO does not currently delete resources that no longer exist in
-    the target version.
+Operators implementing support for change management will carry forward their
+existing upgrade and downgrade strategies.
 
 ## Version Skew Strategy
 
-How will the component handle version skew with other components?
-What are the guarantees? Make sure this is in the test plan.
+Operators implementing change management for their resources will not face any
+new _internal_ version skew complexities due to this enhancement, but change management 
+does increase the odds of prolonged and larger differential kubelet version skew.
 
-Consider the following in developing a version skew strategy for this
-enhancement:
-- During an upgrade, we will always have skew among components, how will this impact your work?
-- Does this enhancement involve coordinating behavior in the control plane and
-  in the kubelet? How does an n-2 kubelet without this feature available behave
-  when this feature is used?
-- Will any other components on the node change? For example, changes to CSI, CRI
-  or CNI may require updating that component before the kubelet.
+For example, particularly given the Manual or Assisted change management strategy, it 
+becomes easier for a cluster lifecycle administrator to forget to update worker-nodes
+along with updates to the control-plane. 
+
+At some point, this will manifest as the kube-apiserver presenting as Upgradeable=False,
+preventing future control-plane updates. To reduce the prevalence of this outcome,
+the additional responsibilities of the cluster lifecycle administrator when 
+employing change management strategies must be clearly documented along with SOPs
+from recovering from skew issues.
+
+HyperShift does not have any integrated skew mitigation strategy in place today. HostedCluster
+and NodePool support independent release payloads being configured and a cluster lifecycle
+administrator can trivially introduce problematic skew by editing these resources. HyperShift
+documentation warns against this, but we should expect a moderate increase in the condition
+being reported on non-managed clusters (OCM can prevent this situation from arising by
+assessing telemetry for a cluster and preventing additional upgrades while worker-node
+configurations are inconsistent with the API server). 
 
 ## Operational Aspects of API Extensions
 
-Describe the impact of API extensions (mentioned in the proposal section, i.e. CRDs,
-admission and conversion webhooks, aggregated API servers, finalizers) here in detail,
-especially how they impact the OCP system architecture and operational aspects.
-
-- For conversion/admission webhooks and aggregated apiservers: what are the SLIs (Service Level
-  Indicators) an administrator or support can use to determine the health of the API extensions
-
-  Examples (metrics, alerts, operator conditions)
-  - authentication-operator condition `APIServerDegraded=False`
-  - authentication-operator condition `APIServerAvailable=True`
-  - openshift-authentication/oauth-apiserver deployment and pods health
-
-- What impact do these API extensions have on existing SLIs (e.g. scalability, API throughput,
-  API availability)
-
-  Examples:
-  - Adds 1s to every pod update in the system, slowing down pod scheduling by 5s on average.
-  - Fails creation of ConfigMap in the system when the webhook is not available.
-  - Adds a dependency on the SDN service network for all resources, risking API availability in case
-    of SDN issues.
-  - Expected use-cases require less than 1000 instances of the CRD, not impacting
-    general API throughput.
-
-- How is the impact on existing SLIs to be measured and when (e.g. every release by QE, or
-  automatically in CI) and by whom (e.g. perf team; name the responsible person and let them review
-  this enhancement)
-
-- Describe the possible failure modes of the API extensions.
-- Describe how a failure or behaviour of the extension will impact the overall cluster health
-  (e.g. which kube-controller-manager functionality will stop working), especially regarding
-  stability, availability, performance and security.
-- Describe which OCP teams are likely to be called upon in case of escalation with one of the failure modes
-  and add them as reviewers to this enhancement.
+The API extensions proposed by this enhancement should not substantially increase
+the scope of work of operators implementing the change management support. The
+operators will interact with the same underlying resources/CRDs but with
+constraints around when changes can be initiated. As such, no significant _new_ 
+operational aspects are expected to be introduced.
 
 ## Support Procedures
 
 Change management problems created by faulty implementations will need to be resolved by 
 analyzing operator logs. The operator responsible for a given resource will vary. Existing
-support tooling like must-gather should capture the information necessary to reproduce
-and fix issues. Since the implementation of change management involves the extension of
-existing operators instead of the creation of new ones, the operators are
-encouraged to use their established channels for communicating issues.
+support tooling like must-gather should capture the information necessary to understand
+and fix issues. 
 
 Change management problems where user expectations are not being met are designed to
-be informed by a detailed `status` provided by the resources bearing the `changeManagement`
+be informed by the detailed `status` provided by the resources bearing the `changeManagement`
 stanza in their `spec`.
 
 ## Alternatives
+
+### Implement maintenance schedules via an external control system (e.g. ACM)
+We do not have an offering in this space. ACM is presently devoted to cluster monitoring and does
+not participate in cluster lifecycle.
 
 ### Do not separate control-plane and worker-node updates into separate phases
 As separating control-plane and worker-node updates into separate phases is an important motivation for this
