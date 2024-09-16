@@ -8,8 +8,6 @@ reviewers:
 creation-date: 2024-09-05
 last-updated: 2024-09-05
 status: implementable
-superseded-by:
-  - "enhancements/testing/openshif-tests-extension.md"
 ---
 
 # OpenShift Tests Extensions
@@ -64,14 +62,17 @@ A further refinement of a component, if necessary. When combined with Component 
 it should be sufficient to file a Jira ticket that will reach domain experts. 
 
 #### Test ID
-A unique combination of Component, Subcomponent, and test name. A Test ID should not be
-repeated in a test listing across all participating extensions.
+A unique combination of Component (Product, Type, Component Name), Subcomponent, 
+and original test name. A Test ID should not be repeated in a test listing across all 
+participating extensions. The Test ID representing a unit of testing logic should
+not change over time (even if the human-readable test name changes, the Test ID
+should remain consistent by using the original test name). 
 
 #### Test Environment
 A Test ID references a unit of testing logic. That logic may pass in some environments,
 fail in others (e.g. a test that passes in gcp but fails in aws), and be 
-intentionally skipped in still overs. A Test Environment
-describes relevant facets of environment in which a test would run or was run, including 
+intentionally skipped in still others. A Test Environment
+describes relevant facets of the environment in which a test would run or was run, including 
 configuration information.
 
 Component Readiness may analyze test results using all, some, or none of this Environment
@@ -82,7 +83,7 @@ all environments, the environment will be ignored for the analysis).
 #### Test Context
 This is information known only by `openshift-tests` as a part of orchestrating test
 execution. It includes information like the random seed being used for test execution
-planning as the number of times a test has been run against a cluster.
+planning and the number of times a test has been run against a cluster.
 
 Rarely, Component Readiness may analyze results using these dimensions to, for example,
 determine that different runs of the same test on the same cluster behave differently
@@ -111,7 +112,7 @@ During a run of the origin test framework (`openshift-tests`), the framework wil
 3. Discover tests available from those extensions (running `list` verb and parsing standard out).
 4. Plan an appropriate and efficient testing strategy based on the framework invocation.
 5. Execute the tests using subsequent invocations of the discovered binaries (`run-test` invocations).
-6. Collecting the result and output of the test invocations and aggregating it into overall test suite results.
+6. Collect the result and output of the test invocations and integrate it into overall test suite results.
 
 
 #### Binary Discovery
@@ -222,11 +223,14 @@ Annotated example `info` output is provided below.
     # unnecessary for a contributor to understand as they will
     # vendor in the majority of the implementation from the
     # "Test Extension Support Module" explained later.
-    "apiVersion": "1",
+    "apiVersion": "1.0",
 
     "source": {
         # The commit from which this binary was compiled.
-        "commit": "87fdbaa"
+        "commit": "87fdbaa",
+        # The git repository (if known) that this
+        # extension was built from.
+        "source_url": "github.com/openshift/kubernetes"
     },
 
     # A single extension can carry tests for multiple
@@ -256,7 +260,7 @@ Annotated example `info` output is provided below.
                 # openshift-tests, so that it can be accounted for in overall
                 # disruption reporting.
                 "disruption": "1m",
-                # If, after application the component configuration, openshift-tests
+                # If, after applying the component configuration, openshift-tests
                 # should await cluster steady state before running configuration
                 # specific tests. If not specified, openshift-tests assumes
                 # the tests can be run immediately after applying the configuration
@@ -313,9 +317,9 @@ Annotated example `info` output is provided below.
                 # This suite can be run separately or will be included
                 # automatically in other suites known to origin.
                 # Here, the extension is informing origin that the suite
-                # is a subuite of openshift/conformance. All information
+                # is a sub-suite of openshift/conformance. All information
                 # about a suite is additive across extension binaries.
-                # For example, mulitple binaries can advertise the same
+                # For example, multiple binaries can advertise the same
                 # suite -- if they advertise different parents, then
                 # origin will treat the suite as a subset of each 
                 # identified parent.
@@ -383,6 +387,13 @@ line of output in actual listing output.
   # Base, human-readable test name. 
   "name": "openssl version compliance",
 
+  # If a test name is updated at any time in the future,
+  # originalName must report the original name of the 
+  # testing logic. This allows component readiness
+  # to display the human-readable version of the test
+  # name while considering test runs across name changes.
+  "originalName": "security version compliance",
+    
   # Optional subcomponent information.
   "subcomponent": "ui",
     
@@ -554,7 +565,18 @@ from prowjob names.
 
 ```python
 {
-    "name": "test name",
+    # Human-readable test name
+    "name": "openssl security compliance",
+    
+    # Original human-readable test name, if it has changed over time.
+    "originalName": "fips security compliance",
+    
+    # The Test ID openshift/origin has defined for this test based
+    # on component and test metadata. It is meant to be unique
+    # across all other components and consistent across time
+    # (even if the human-readable name for a unit of test logic
+    # is changed).
+    "id": "openshift-payload-api-server-fips security compliance",
     
     "result": "pass",
 
