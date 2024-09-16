@@ -38,14 +38,13 @@ effort, complexity, and risk of introducing new tests.
 1. Reduce the effort, complexity, and risk of introducing new tests to OpenShift.
 2. Allow tests to be introduced in the same pull request as the PR which fixes a bug or introduces a feature.
 3. Allow component owners to introduce new test suites / add tests to existing suites.
-4. Allow non-OpenShift components, including layered products, to participate in extending OpenShift tests.
+4. Allow non-OpenShift components, including layered products, to participate in extending OpenShift tests and Component Readiness.
 5. Maintain and increase testing coverage.
 6. Maintain and increase code quality.
 7. Maintain and improve the signal TRT provides through Component Readiness.
 8. Provide a standard model for testing component configurations.
 9. Allow distributed contribution of tests while introducing centralized mechanisms to require important tests from component owners and improve coverage over time.
 10. Improve testing efficiency by reducing initialization time.
-11. Allow layered products to participate in OpenShift testing & component readiness.
 
 ### Non-Goals
 1. Fully decompose `openshift-tests` or decentralize test orchestration & reporting.
@@ -57,7 +56,8 @@ effort, complexity, and risk of introducing new tests.
 #### Component
 A component is a part of a software product. Component information includes the product name, 
 component name, and the type of the component. A single invocation of an external binary 
-can only act on a single component.
+can only associate with a single component (e.g. it can only list tests for / execute tests
+for a single component).
 
 #### Subcomponent
 A further refinement of a component, if necessary. When combined with Component information,
@@ -68,9 +68,10 @@ A unique combination of Component, Subcomponent, and test name. A Test ID should
 repeated in a test listing across all participating extensions.
 
 #### Test Environment
-A Test ID references a unit of testing logic. That logic may pass in some environments
-and fail in others (e.g. a test that passes in gcp but fails in aws). A Test Environment
-describes relevant facets of environment in which that test was run, including 
+A Test ID references a unit of testing logic. That logic may pass in some environments,
+fail in others (e.g. a test that passes in gcp but fails in aws), and be 
+intentionally skipped in still overs. A Test Environment
+describes relevant facets of environment in which a test would run or was run, including 
 configuration information.
 
 Component Readiness may analyze test results using all, some, or none of this Environment
@@ -147,7 +148,7 @@ objects.
 
 `TestExtensionAdmission` contain a list of namespaces/imagestreams 
 from which `openshift-tests` is permitted to extract extension binaries. This
-can include a wildcard patterns for namespace, imagestream, or both.
+can include wildcard patterns for namespace, imagestream, or both.
 
 ```yaml
 kind: TestExtensionAdmission
@@ -224,7 +225,7 @@ Annotated example `info` output is provided below.
     "apiVersion": "1",
 
     "source": {
-        # The commit from which this binary from compiled.
+        # The commit from which this binary was compiled.
         "commit": "87fdbaa"
     },
 
@@ -271,7 +272,7 @@ Annotated example `info` output is provided below.
               # Configurations can request to be run in isolation
               # from other component configurations. 
               # If two component configurations have a conflict name in common, 
-              # test planning will ensure that there is not attempt to 
+              # test planning will ensure that there is no attempt to 
               # apply those profiles simultaneously.
               "isolation": {
                 "conflict":  [
@@ -534,6 +535,9 @@ will:
 1. Iterate through all involved components and configure them with non-conflicting configuration profiles (`config` verb).
 2. Await a high-level cluster steady state (cluster operators available, machines config up-to-date) if any configuration profile requires it.
 3. Run tests within the bucket with non-conflicting, test-level parallelization.
+
+Between buckets, the component may be asked to set its required `default` profile in order
+to return to its install-time configuration.
 
 #### Test Result Aggregation
 
