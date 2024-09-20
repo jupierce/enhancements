@@ -10,6 +10,42 @@ last-updated: 2024-09-05
 status: implementable
 ---
 
+<!-- TOC -->
+* [OpenShift Tests Extensions](#openshift-tests-extensions)
+  * [Release Signoff Checklist](#release-signoff-checklist)
+  * [Summary](#summary)
+  * [Motivation](#motivation)
+    * [Goals](#goals)
+    * [Non-Goals](#non-goals)
+  * [Proposal](#proposal)
+    * [Concepts](#concepts)
+      * [Component](#component)
+      * [Subcomponent](#subcomponent)
+      * [Test ID](#test-id)
+      * [Test Environment](#test-environment)
+      * [Test Context](#test-context)
+    * [Test Extension Binaries](#test-extension-binaries)
+      * [Binary Discovery](#binary-discovery)
+        * [OpenShift Payload Extension Binaries](#openshift-payload-extension-binaries)
+        * [Non-Payload Extension Binaries](#non-payload-extension-binaries)
+      * [Binary Format](#binary-format)
+      * [Binary Extraction](#binary-extraction)
+      * [Extension Interface](#extension-interface)
+        * [Info - Extension Metadata](#info---extension-metadata)
+        * [List - Extension Test Listing](#list---extension-test-listing)
+        * [Run-Test - Running Extension Tests](#run-test---running-extension-tests)
+        * [Config - Component Configuration Testing](#config---component-configuration-testing)
+      * [Test Result Aggregation](#test-result-aggregation)
+    * [Risks and Mitigations](#risks-and-mitigations)
+      * [Binary Incompatibility](#binary-incompatibility)
+        * [CPU Architecture](#cpu-architecture)
+      * [Runtime Size / Speed](#runtime-size--speed)
+      * [Image Size](#image-size)
+      * [Poor Extension Implementation](#poor-extension-implementation)
+    * [Version Skew Strategy](#version-skew-strategy)
+  * [Alternatives](#alternatives)
+<!-- TOC -->
+
 # OpenShift Tests Extensions
 
 ## Release Signoff Checklist
@@ -43,6 +79,7 @@ effort, complexity, and risk of introducing new tests.
 8. Provide a standard model for testing component configurations.
 9. Allow distributed contribution of tests while introducing centralized mechanisms to require important tests from component owners and improve coverage over time.
 10. Improve testing efficiency by reducing initialization time.
+11. Allow centralized and methodical pre-submit testing of the test extension implementations. For example, preventing a test rename without preserving information about the original name.
 
 ### Non-Goals
 1. Fully decompose `openshift-tests` or decentralize test orchestration & reporting.
@@ -133,9 +170,10 @@ An annotation on the ImageStreamTag will then identify the binary to extract and
 arguments to pass ahead of the extension interface verbs.
 `testextension.redhat.io/binary=<binary-path>.gz [--argument=value]`
 
-The creation of this imagestream/label/annotation should be gated on the existence of the
+Well-behaved operators should gate the creation of this imagestream/label/annotation on the existence of the
 `TestExtensionAdmission` custom resource definition (the code should not attempt to 
-inspect `TestExtensionAdmissions` -- just check for the CRD itself).
+inspect `TestExtensionAdmissions` instances -- just check for the CRD itself so that operators
+don't liter clusters with ImageStreams only applicable for testing in a production environment).
 
 Optional Operator authors must ensure that the image carrying the extension binary
 is identified in their ClusterServiceVersion (CSV) so that tools like `oc-mirror`
@@ -204,6 +242,7 @@ info      - Output test contribution extension version and metadata.
 list      - Output tests supported by this extension.
 run-test  - Run one or more tests and output results.
 config    - Component configuration management.
+update    - Update git metadata for extension.
 ```
 
 ##### Info - Extension Metadata
@@ -549,6 +588,21 @@ will:
 
 Between buckets, the component may be asked to set its required `default` profile in order
 to return to its install-time configuration.
+
+#### Update - Metadata Validation
+Component owners will be responsible for implementing the extension interface. To prevent common mistakes
+and ensure conformance with the evolution of their implementation, `make` (or similar build system)
+must run `<extension binary> [component parameters] update [--basedir <basedir>]` after the extension binary is built.
+
+The `update` verb will create or update files under `hack/.openshift-tests-exension/product/type/component/*`, by default
+(basedir defaults to `hack/.openshift-tests-extension`).
+If an incompatible change is introduced from the prior invocation of `update` (e.g. changing 
+a test name without preserving the original), `update` will raise an error 
+which the component owner must correct before committing their change in git.
+
+The content of the files stored under `.openshift-tests-extension` is subject to change and wholly
+defined by the `github.com/openshift-eng/openshift-tests-extension` module. Individual component
+owners should not modify files under this path except through invocations of `update`.
 
 #### Test Result Aggregation
 
