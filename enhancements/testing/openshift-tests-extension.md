@@ -254,6 +254,14 @@ with verbs & arguments consistent with the interface version they support.
 Info also provides information to origin about how to construct new or contribute new
 test suites.
 
+```
+$ extension-binary info
+  --component    "default" or component name 
+  
+Exposed components:
+- openshift:payload:hyperkube  
+```
+
 Annotated example `info` output is provided below.
 ```python
 {
@@ -289,7 +297,7 @@ Annotated example `info` output is provided below.
         "type": "payload",
         "name": "hyperkube"
     },
-
+    
     "configurations": [
         {
             "profile": "common-mode-1",
@@ -373,7 +381,17 @@ Annotated example `info` output is provided below.
             # Test tags, names, and other attributes will be
             # described later.
             "qualifiers": [
-                "(test.tags.suite==\"fips\" || test.name.contains(\"fips\")) && !test.labels.has(\"Disruptive\")"
+                "(test.tags.suite==\"fips\" || test.name.contains(\"fips\")) && !test.labels.has(\"Disruptive\")",
+                # Normally, CEL expressions evaluate against ALL test
+                # specs discovered by origin, regardless of the extension
+                # that advertised them. This makes it easy for 
+                # a suite defined in one extension to "absorb" tests 
+                # specified by another extension. To limit the expression
+                # to only tests in this extension, "owner" will be true
+                # only when evaluating tests advertised from this 
+                # extension.
+                # "owner" is equivalent to "extension.component == self.component"
+                "owner && test.name.contains(\"FIPS\"))"
             ]
         }
     ]
@@ -395,6 +413,8 @@ defined by the extension interface version implemented by the binary.
 **Version 1**
 ```
 $ extension-binary list 
+Environment Information:
+  --component     "default" or "<product>:<type>:<component>"
   --platform      The hardware or cloud platform ("aws", "gcp", "metal", ...).
   --network       The network of the target cluster ("ovn", "sdn"). 
   --upgrade       The upgrade that was performed prior to the test run ("micro", "minor").
@@ -403,6 +423,9 @@ $ extension-binary list
   --installer     The installer used to create the cluster ("ipi", "upi", "assisted", ...).
   --config        The component configuration to assume is active on the cluster.
   --version       "major.minor" version of target cluster. 
+
+Optional/Devel:
+  --suite         List only tests matched by specified suite's qualifiers.
 ```
 
 The "list" verb will not be provided a kubeconfig and must output tests based solely
@@ -487,7 +510,7 @@ line of output in actual listing output.
     "timeout": "16s",
   },
 
-  # Tests can be identified as "informing" or "production".
+  # Tests can be identified as "informing" or "blocking".
   # Informing tests will not negatively impact default views
   # in Component Readiness.
   # However, policies may be established in the future that 
@@ -505,10 +528,12 @@ in the "list" verb section (in order to reduce fact discovery time needed
 for each test run) and one or more test names to invoke.
 ```
 $ extension-binary run-test 
+  --component     "default" or "<product>:<type>:<component>"
   --platform      The hardware or cloud platform ("aws", "gcp", "metal", ...).
-  ...other context arguments...
+  ...other environment arguments...
   --config        The component configuration profile to assume is active on the cluster.
   --name | -n     Test name to invoke (-n can be specified multiple times).
+  --list          Filename or "--" for stdin of tests to invoke from 'list' output.
 ```
 
 `run-test` should run the specified tests in parallel. To prevent 
@@ -535,8 +560,9 @@ A single test result will contain the following information, encoded on a single
 {
     "name": "test name",
     
-    # Duration of test run in milliseconds
-    "duration": "1012",
+    # RFC-3339 start and stop time in UTC with millisecond precision.
+    "startTime": "2026-01-02T15:04:05.000Z",
+    "endTime": "2026-01-02T15:04:06.840Z",
     
     # The outcome of the test; pass, fail, skip, timeout.
     "result": "pass",
@@ -545,11 +571,24 @@ A single test result will contain the following information, encoded on a single
     
     # Human-readable messages to further explain 
     # skips / timeouts / etc.
-    "messages": [
+    "details": [
         "example message"
     ]
 }
 ```
+
+When developing an extension, it may be useful to be able to run a suite
+advertised by an extension directly. This can be accomplished using a
+combination of `list` and `run-test`.
+
+```
+$ extension list --suite my-suite --platform aws ... | extension run-test --platform aws ...  --list --
+```
+
+Note that `run-test` will blindly execute tests in the list as quickly as possible,
+in parallel, without consideration for system resources or parallelism constraints
+`list` may advertise. Resource constraints will only be honored by `origin` -- it will
+choreograph invocations of `run-test` consistent with those constraints.
 
 ##### Config - Component Configuration Testing
 
@@ -561,6 +600,7 @@ The `config` verb will not return until the extension has watched the component
 fully apply the configuration (or it should timeout with an error).
 ```
 $ extension-binary config
+  --component                   "default" or "<product>:<type>:<component>"
   --profile <profile name>      The configuration profile to apply or "default".
 ```
 
@@ -592,7 +632,7 @@ to return to its install-time configuration.
 #### Update - Metadata Validation
 Component owners will be responsible for implementing the extension interface. To prevent common mistakes
 and ensure conformance with the evolution of their implementation, `make` (or similar build system)
-must run `<extension binary> [component parameters] update [--basedir <basedir>]` after the extension binary is built.
+must run `<extension binary> update [--component product:type:component] [--basedir <basedir>]` after the extension binary is built.
 
 The `update` verb will create or update files under `hack/.openshift-tests-exension/product/type/component/*`, by default
 (basedir defaults to `hack/.openshift-tests-extension`).
@@ -603,6 +643,88 @@ which the component owner must correct before committing their change in git.
 The content of the files stored under `.openshift-tests-extension` is subject to change and wholly
 defined by the `github.com/openshift-eng/openshift-tests-extension` module. Individual component
 owners should not modify files under this path except through invocations of `update`.
+
+#### Extension Implementation
+github.com/openshift-eng/openshift-tests-extension will make contributing tests as simple
+as possible. An example of what implementing the extension interface with this module
+is provided below.
+
+```golang
+componentExtension := extensions.NewExtension("openshift", "payload", "hyperkube")
+
+// boilerplate to initialize ginkgo omitted
+
+// Allow extensions to Walk tests and return them wrapped
+// in a wrapper extensions.ExtensionTestSpec. We can offer these
+// helper functions to ingest tests from different testing framework.
+var ginkgoExtensionSpecs extensions.ExtensionTestSpecSet  // an abstraction around a group of ExtensionTestSpec
+
+// In this case, they are asking us to wrap Ginkgo tests they assert follow our 
+// historical conventions.
+ginkgoExtensionSpecs, err = extensions.BuildExtensionTestSpecsFromOpenShiftGinkgoSuite(ginkgo.GetSuite())
+
+// If we don't support their testing framework, they can wrap tests
+// with lower level API. Here, they give us an interface implementation
+// exposing .RunTests(testName ...string) []TestResult whose only contract is to run those
+// tests in parallel and return results in our required format.
+var customExtensionSpecs extensions.ExtensionTestSpecSet
+customExtensionSpecs, err = extensions.BuildExtensionTestSpec(myTestRunner, "test name 1", "test name 2", ...names this runner can run...))
+
+// Once individually wrapped in ExtensionTestSpec and grouped into ExtensionTestSpecSet
+// handling the ginkgo vs custom tests becomes identical. ExtensionTestSpec (ETS) is where you
+// can store all of the metadata that the enhancement calls for on a test-by-test basis.
+// As you note in your feedback, we can't possibily extract this from ginkgo tags, but 
+// we can, over time, expect more metadata to be attached by the author.
+
+// label all ETS in this set as slow.. Common ones, custom ones, it doesn't matter.
+// BuildExtensionTestSpecsFromGinkgoSuite may pre-populate tags using the regex [.*]
+// on tests names, while the lower-level API may not make this assumption.
+customExtensionSpecs.Label(commonlabels.SLOW) 
+
+// similar story with tags.
+customExtensionSpecs.Tag({"mytag": "myvalue"})  
+
+// Here, OpenShift convention was used to determine which tests to run on AWS
+// As a contrived example, let's say we want to run these same tests on GovCloud
+awsTests := ginkgoExtensionSpecs.Select(extensions.PlatformSelector(platforms.AWS))
+awsTests.AddPlatform(platforms.GovCloud)
+
+// And so on with expressive grouping & metadata management. awsTests
+// references the same objects as ginkgoExtensionSpecs, so changes in
+// one are reflected immediately in both sets.
+awsTests.Select(extensions.LabelSelector(platform.SLOW)).SetResource(resource.CPU, "5000m")
+
+// Since this set of tests doesn't use the OpenShift naming conventions, they
+// must constrain environmental parameters themselves.
+customExtensionSpecs.Select(extensions.NameRegExSelector(".*cld/aws.*")).SetPlatforms(platforms.AWS)
+
+// Since everything is an ExtensionTestSpec, you can mix sets.
+allSpecsSet := customExtensionSpecs
+allSpecsSet.Extend(ginkgoExtensionSpecs)
+
+// The author can iterate through all tests and, for example,
+// set OriginalName for each based on a configuration file
+// or dictionary maintained in their repository.
+allSpecsSet.Walk(func(*ExtensionTestSpec))
+
+// Finally, some or all of the specs are added for the component. 
+componentExtension.AddTestSpecSets(allSpecsSet)
+
+customSuite := componentExtension.DefineSuite("my-custom-suite")
+customSuite.AddQualifier("(test.tags.mytag==\"myvalue\"")  // CEL expression which selects appropriate tests regardless of the extension which defines the test
+customSuite.AddParent("openshift/conformance") // Also run this suite when openshift/conformance runs
+
+// The first component in the NewExtensionRegistry argument list
+// will be selected by --component default, but also
+// selectable with --component openshift:payload:hyperkube . 
+// Most authors will be writing tests for one component, so origin
+// running --component default, unless instructed otherwise, will "just work".
+er := extensions.NewExtensionRegistry(componentExtension, ...)
+
+// When using Cobra, this allows the main verb names to change without the author needing to
+// enumerate them.
+root.AddCommand(er.CobraCommands()...)
+```
 
 #### Test Result Aggregation
 
@@ -678,7 +800,17 @@ from prowjob names.
         # analyze results including this dimension if, for example,
         # we want to check whether the first run is as consistent
         # as the following N.
-        "run": 0
+        "run": 0,
+        
+        # Attributes of the host running the tests (not the 
+        # system under test). This can help us statistically
+        # analyze whether one system involved in running the 
+        # test is introducing failures that another is not
+        # (e.g. because it has a flakey network).
+        "testDriver": {
+            "cluster": "build01",
+            "arch": "arm64"
+        }
     }
 }
 ```
