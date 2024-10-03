@@ -35,6 +35,8 @@ status: implementable
         * [List - Extension Test Listing](#list---extension-test-listing)
         * [Run-Test - Running Extension Tests](#run-test---running-extension-tests)
         * [Config - Component Configuration Testing](#config---component-configuration-testing)
+      * [Update - Metadata Validation](#update---metadata-validation)
+      * [Extension Implementation](#extension-implementation)
       * [Test Result Aggregation](#test-result-aggregation)
     * [Risks and Mitigations](#risks-and-mitigations)
       * [Binary Incompatibility](#binary-incompatibility)
@@ -280,6 +282,50 @@ Annotated example `info` output is provided below.
         "source_url": "github.com/openshift/kubernetes"
     },
 
+    # Aspects of the environment that the only extension 
+    # can determine (e.g. the version of its target 
+    # component).
+    "environment" : {
+      
+      # Relevant versions of software detected on the system under
+      # test. origin will combine (and dedupe) the versions reported 
+      # by in the aggregated test format output, so an extension
+      # need only identify the versions of the software
+      # it is testing (e.g. an OLM operator need not
+      # report the version of OpenShift) or those relevant
+      # to its test results that other extensions would might not
+      # be reporting (e.g. an OLM dependentcy).
+      "versions": [
+        {
+          "component": {
+            "product": "openshift",
+            "type": "payload",
+            "name": "hyperkube"
+          },
+          
+          "version": "4.18.0",
+          
+          # A sha256 pullspec for an image
+          # or a git URL to a specific commit. Something that
+          # should identify the content of the 
+          # software under test.
+          "source": {
+            "type": "git",
+            "commit": "...",
+            "url": "github.com/..."
+          },
+          
+          # If the component was upgraded from known versions.
+          "from": [
+            {
+              "name": "...",
+              "source": "..."
+            } 
+          ]
+        } 
+      ],      
+    },
+  
     # A single extension can carry tests for multiple
     # components. However, each invocation of the binary
     # can only represent and act on information relative
@@ -753,7 +799,7 @@ from prowjob names.
     # (even if the human-readable name for a unit of test logic
     # is changed).
     "id": "openshift-payload-api-server-fips security compliance",
-    
+ 
     "result": "pass",
 
     # ...other test result information...
@@ -768,19 +814,71 @@ from prowjob names.
     },
     
     "environment": {
-        "platform": "aws",
-        "architecture": "amd64",
-        # ...others...
+      "platform": "aws",
+      "architecture": "amd64",
+      # ...others...
+      
+      # Configuration information is also included. 
+      "configuration": {
+          # The configuration id applied to the component
+          # before the test was run.
+          "component": "default",
+      },
+
         
-        # Configuration information is also included. 
-        "configuration": {
-            # The configuration id applied to the component
-            # before the test was run.
-            "component": "default",
-        }
+      # Aggregated version information from all extensions
+      # as well as what origin can identify.
+      "versions": [
+        # Here, the environment involves a management cluster
+        # and a hosted cluster. They have independent versions.
+        {
+          "component": {
+            "product": "openshift",
+            "type": "management",
+          },
+          
+          "version": "4.18.0",
+
+          "source": {
+            "type": "image",
+            "digest": "sha256:...",
+            "url": "registry.ci.openshift.org/..."
+          },
+          
+          # If the component was upgraded from known versions.
+          "from": [
+            {
+              "name": "...",
+              "source": "..."
+            } 
+          ]
+        }, 
+        {
+          "component": {
+            "product": "openshift",
+            "type": "hosted",
+          },
+          
+          "version": "4.17.0",
+          
+          "source": {
+            "type": "image",
+            "digest": "sha256:...",
+            "url": "registry.ci.openshift.org/..."
+          },
+          
+          "from": [
+            {
+              "name": "...",
+              "source": "..."
+            } 
+          ]
+        } 
+      ],
     },
     
-    # Information about how the test was run
+    # Information about how the test was run which should
+    # not alter the outcome of the test.
     "context": {
         # A small number of seeds can be used to randomize test
         # parallelization and bucketing. Analyzing seeds against
@@ -802,14 +900,25 @@ from prowjob names.
         # as the following N.
         "run": 0,
         
+        "job": {
+            # Name of the job which drove the test
+            "name": "...",
+            # Where the job information can be reviewed.
+            "url": "..."
+        },
+      
         # Attributes of the host running the tests (not the 
-        # system under test). This can help us statistically
-        # analyze whether one system involved in running the 
-        # test is introducing failures that another is not
-        # (e.g. because it has a flakey network).
+        # system under test) or cloud account used. This can 
+        # help us statistically analyze whether one system 
+        # involved in running the testing is introducing 
+        # failures that another is not (e.g. because it has 
+        # a flakey network).
         "testDriver": {
             "cluster": "build01",
-            "arch": "arm64"
+            "arch": "arm64",
+            # Cloud account in which the ephemeral cluster was 
+            # installed.
+            "account": "34908092383"
         }
     }
 }
