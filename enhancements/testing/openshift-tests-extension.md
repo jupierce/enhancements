@@ -60,9 +60,18 @@ status: implementable
 
 ## Summary
 
-Define a pattern by which repos other than origin can contribute tests to 
-OpenShift test suites.
-// Layered on commits from Stephen with good description from gdoc if we move forward.
+Today all conformance tests for OpenShift are in the monolithic [openshift-tests]
+(https://www.github.com/openshift/origin) binary. These tests run on all the possible
+flavors of OpenShift (more than 50) and contribute signal to tools like the
+Release Controller and Component Readiness. However, the high barrier to entry in 
+openshift-tests means that teams are either not writing tests, or are using their 
+own homegrown solutions that ran in only very narrow configurations.
+
+This enhancement proposes a framework to allow allows external repositories to 
+contribute tests to openshift-tests' suites with extension binaries, keeping tests 
+colocated with the features they are testing. It defines a standardized interface 
+for test discovery, execution, and result aggregation, allowing decentralized 
+contributions while maintaining centralized orchestration.
 
 ## Motivation
 
@@ -273,13 +282,13 @@ Annotated example `info` output is provided below.
     # vendor in the majority of the implementation from the
     # "Test Extension Support Module" explained later.
     "apiVersion": "1.0",
-
+ 
+    // source contains git information from which this binary was
+    // compiled
     "source": {
-        # The commit from which this binary was compiled.
-        "commit": "87fdbaa",
-        # The git repository (if known) that this
-        # extension was built from.
-        "source_url": "github.com/openshift/kubernetes"
+        "commit": "fceca0496512cad1fcadf1fc67674bff5c6b7b83",
+        "build_date": "2024-10-09T13:10:20Z",
+        "git_tree_state": "dirty"
     },
 
     # Aspects of the environment that the only extension 
@@ -433,11 +442,8 @@ Annotated example `info` output is provided below.
                 # that advertised them. This makes it easy for 
                 # a suite defined in one extension to "absorb" tests 
                 # specified by another extension. To limit the expression
-                # to only tests in this extension, "owner" will be true
-                # only when evaluating tests advertised from this 
-                # extension.
-                # "owner" is equivalent to "extension.component == self.component"
-                "owner && test.name.contains(\"FIPS\"))"
+                # to tests in only certain extensions, you can filter on "source"
+                "source = \"openshift:payload:hyperkube\" && test.name.contains(\"FIPS\"))"
             ]
         }
     ]
@@ -475,7 +481,8 @@ Optional/Devel:
 ```
 
 The "list" verb will not be provided a kubeconfig and must output tests based solely
-on environment information. If no environment arguments are provided, all tests must be listed.
+on environment information. If no environment arguments are provided, all tests must be
+listed.
 
 Listings are formatted as JSONL with one test description per line. A full listing contains
 zero or more test description objects. The following example shows an abbreviated JSONL listing 
@@ -592,9 +599,13 @@ requirements defined by the "list" verb).
 executions of the extension binary in order to amortize initialization
 costs.
 
-Standard output from the invocation will be serialized into JSONL with
-each line associated with a single test run result.
+Standard output from the invocation will be serialized into JSON with indentation
+for human readability.  Origin will call run-test with `-o jsonl` which will output 
+the results as they complete in JSONL.
 
+Standard error includes the live output from ginkgo or your test framework as it runs.
+
+JSONL format:
 ```python
 { "name": "T1", "result": "success", }
 { "name": "T1", "result": "success", }
@@ -614,6 +625,9 @@ A single test result will contain the following information, encoded on a single
     "result": "pass",
     "output": "standard output of the test",
     "error": "standard error of the test",
+   
+   # Lifecycle of the test - whether it's blocking, informing, or experimental
+   "lifecycle": "blocking",
     
     # Human-readable messages to further explain 
     # skips / timeouts / etc.
@@ -624,17 +638,26 @@ A single test result will contain the following information, encoded on a single
 ```
 
 When developing an extension, it may be useful to be able to run a suite
-advertised by an extension directly. This can be accomplished using a
-combination of `list` and `run-test`.
+advertised by an extension directly. This can be accomplished using the built-in
+`run-suite` command:
 
 ```
-$ extension list --suite my-suite --platform aws ... | extension run-test --platform aws ...  --list --
+$ extension run-suite my-suite --platform aws ...
+```
+
+This can also be accomplished using a combination of `list` and `run-test`. 
+`run-test` can also take a list of tests to run on stdin when piped from another tool, 
+for example:
+
+```
+$ extension list -o names --suite my-suite --platform aws ... | ./example-tests run-test --platform aws ...
 ```
 
 Note that `run-test` will blindly execute tests in the list as quickly as possible,
 in parallel, without consideration for system resources or parallelism constraints
 `list` may advertise. Resource constraints will only be honored by `origin` -- it will
 choreograph invocations of `run-test` consistent with those constraints.
+
 
 ##### Config - Component Configuration Testing
 
@@ -698,37 +721,36 @@ is provided below.
 ```golang
 componentExtension := extensions.NewExtension("openshift", "payload", "hyperkube")
 
-// boilerplate to initialize ginkgo omitted
-
 // Allow extensions to Walk tests and return them wrapped
 // in a wrapper extensions.ExtensionTestSpec. We can offer these
 // helper functions to ingest tests from different testing framework.
-var ginkgoExtensionSpecs extensions.ExtensionTestSpecSet  // an abstraction around a group of ExtensionTestSpec
+var ginkgoExtensionSpecs extensions.ExtensionTestSpecs
 
 // In this case, they are asking us to wrap Ginkgo tests they assert follow our 
 // historical conventions.
-ginkgoExtensionSpecs, err = extensions.BuildExtensionTestSpecsFromOpenShiftGinkgoSuite(ginkgo.GetSuite())
+ginkgoExtensionSpecs, err = extensions.BuildExtensionTestSpecsFromOpenShiftGinkgoSuite()
 
 // If we don't support their testing framework, they can wrap tests
-// with lower level API. Here, they give us an interface implementation
-// exposing .RunTests(testName ...string) []TestResult whose only contract is to run those
-// tests in parallel and return results in our required format.
-var customExtensionSpecs extensions.ExtensionTestSpecSet
-customExtensionSpecs, err = extensions.BuildExtensionTestSpec(myTestRunner, "test name 1", "test name 2", ...names this runner can run...))
+// with lower level API. Here, they give us an implementation that builds
+// a set of ExtensionTestSpecs. Each ExtensionTestSpec should have a `Run() 
+// *ExtensionTestResult` function that runs the test and returns our result format to 
+// us. This allows you to wrap essentially any test framework, or none at all.  
+// Implementations of `Run()` must be thread safe.  You can use a mutex to prevent 
+// parallel execution.
+var customExtensionSpecs extensions.ExtensionTestSpecs
+customExtensionSpecs, err = BuildExtensionTestSpecsFromCustomSource(...) 
 
-// Once individually wrapped in ExtensionTestSpec and grouped into ExtensionTestSpecSet
+// Once individually wrapped in ExtensionTestSpec and grouped into ExtensionTestSpecs
 // handling the ginkgo vs custom tests becomes identical. ExtensionTestSpec (ETS) is where you
 // can store all of the metadata that the enhancement calls for on a test-by-test basis.
-// As you note in your feedback, we can't possibily extract this from ginkgo tags, but 
-// we can, over time, expect more metadata to be attached by the author.
 
-// label all ETS in this set as slow.. Common ones, custom ones, it doesn't matter.
+// Label all ETS in this set as slow.. Common ones, custom ones, it doesn't matter.
 // BuildExtensionTestSpecsFromGinkgoSuite may pre-populate tags using the regex [.*]
 // on tests names, while the lower-level API may not make this assumption.
-customExtensionSpecs.Label(commonlabels.SLOW) 
+customExtensionSpecs.AddLabel(commonlabels.SLOW) 
 
 // similar story with tags.
-customExtensionSpecs.Tag({"mytag": "myvalue"})  
+customExtensionSpecs.AddTag({"mytag": "myvalue"})  
 
 // Here, OpenShift convention was used to determine which tests to run on AWS
 // As a contrived example, let's say we want to run these same tests on GovCloud
@@ -744,32 +766,69 @@ awsTests.Select(extensions.LabelSelector(platform.SLOW)).SetResource(resource.CP
 // must constrain environmental parameters themselves.
 customExtensionSpecs.Select(extensions.NameRegExSelector(".*cld/aws.*")).SetPlatforms(platforms.AWS)
 
+// You can add hooks to execute BeforeAll, BeforeEach, AfterAll, AfterEach for 
+// ExtensionTestSpecs.  These are sticky to that group individual specs, so you're still
+// able to use different initialization code per spec set.
+customExtensionSpecs.AddBeforeAll(func() {
+    // perform custom extension initialization
+})
+
+ginkgoExtensionSpecs.AddBeforeAll(func() {
+    // perform custom ginkgo initialization
+})
+
 // Since everything is an ExtensionTestSpec, you can mix sets.
 allSpecsSet := customExtensionSpecs
-allSpecsSet.Extend(ginkgoExtensionSpecs)
+allSpecsSet.Add(ginkgoExtensionSpecs)
+
+allSpecsSet.AddAfterAll(func() {
+    // perform clean up that applies to both sets
+})
 
 // The author can iterate through all tests and, for example,
 // set OriginalName for each based on a configuration file
 // or dictionary maintained in their repository.
-allSpecsSet.Walk(func(*ExtensionTestSpec))
+allSpecsSet.Walk(func(*ExtensionTestSpec) {
+    // do stuff
+})
 
 // Finally, some or all of the specs are added for the component. 
-componentExtension.AddTestSpecSets(allSpecsSet)
+componentExtension.AddSpecs(allSpecsSet...)
 
-customSuite := componentExtension.DefineSuite("my-custom-suite")
-customSuite.AddQualifier("(test.tags.mytag==\"myvalue\"")  // CEL expression which selects appropriate tests regardless of the extension which defines the test
-customSuite.AddParent("openshift/conformance") // Also run this suite when openshift/conformance runs
+customSuite := extension.Suite{
+    Name: "my-custom-suite",
+    Parents: []string{
+        "openshift/conformance/parallel",
+    },
+    Qualifiers: []string{
+        // CEL expression which selects appropriate tests
+        "(test.tags.mytag==\"myvalue\"", 
+    }
+}
+
+// AddGlobalSuite adds a suite whose qualifiers will extend to all test binaries
+componentExtension.AddGlobalSuite(customSuite)
+
+// AddSuite adds a suite whose qualifiers are automatically modified to filter on
+// source = this component.
+componentExtension.AddSuite(customSuite)
 
 // The first component in the NewExtensionRegistry argument list
 // will be selected by --component default, but also
 // selectable with --component openshift:payload:hyperkube . 
 // Most authors will be writing tests for one component, so origin
-// running --component default, unless instructed otherwise, will "just work".
-er := extensions.NewExtensionRegistry(componentExtension, ...)
+// omitting an option for --component, unless instructed otherwise, will "just 
+// work".
+componentRegistry := e.NewRegistry()
+componentRegistry.Register(componentRegistry)
+
+root := &cobra.Command{
+    Long: "OpenShift Tests Extension Example",
+}
 
 // When using Cobra, this allows the main verb names to change without the author needing to
 // enumerate them.
-root.AddCommand(er.CobraCommands()...)
+root.AddCommand(cmd.DefaultExtensionCommands(registry)...)
 ```
 
 #### Test Result Aggregation
@@ -929,7 +988,7 @@ from prowjob names.
 #### Binary Incompatibility
 Copying a binary from a different image into a running pod exposes us to binary incompatibility. 
 
-##### CPU Architecture 
+##### CPU Architecture
 An arm64 binary will not run in an amd64 based pod. `openshift-tests` will need to run on 
 a build farm node with a CPU architecture consistent with architecture of the cluster 
 payload under test.
