@@ -13,43 +13,43 @@ authors:
 ---
 
 <!-- TOC -->
-
 * [OpenShift Tests Extensions](#openshift-tests-extensions)
-    * [Release Signoff Checklist](#release-signoff-checklist)
-    * [Summary](#summary)
-    * [Motivation](#motivation)
-        * [Goals](#goals)
-        * [Non-Goals](#non-goals)
-    * [Proposal](#proposal)
-        * [Concepts](#concepts)
-            * [Component](#component)
-            * [Subcomponent](#subcomponent)
-            * [Test ID](#test-id)
-            * [Test Environment](#test-environment)
-            * [Test Context](#test-context)
-        * [Test Extension Binaries](#test-extension-binaries)
-            * [Binary Discovery](#binary-discovery)
-                * [OpenShift Payload Extension Binaries](#openshift-payload-extension-binaries)
-                * [Non-Payload Extension Binaries](#non-payload-extension-binaries)
-            * [Binary Format](#binary-format)
-            * [Binary Extraction](#binary-extraction)
-            * [Extension Interface](#extension-interface)
-                * [Info - Extension Metadata](#info---extension-metadata)
-                * [List - Extension Test Listing](#list---extension-test-listing)
-                * [Run-Test - Running Extension Tests](#run-test---running-extension-tests)
-                * [Config - Component Configuration Testing](#config---component-configuration-testing)
-            * [Update - Metadata Validation](#update---metadata-validation)
-            * [Extension Implementation](#extension-implementation)
-            * [Test Result Aggregation](#test-result-aggregation)
-        * [Risks and Mitigations](#risks-and-mitigations)
-            * [Binary Incompatibility](#binary-incompatibility)
-                * [CPU Architecture](#cpu-architecture)
-            * [Runtime Size / Speed](#runtime-size--speed)
-            * [Image Size](#image-size)
-            * [Poor Extension Implementation](#poor-extension-implementation)
-        * [Version Skew Strategy](#version-skew-strategy)
-    * [Alternatives](#alternatives)
-
+  * [Release Signoff Checklist](#release-signoff-checklist)
+  * [Summary](#summary)
+  * [Motivation](#motivation)
+    * [Goals](#goals)
+    * [Non-Goals](#non-goals)
+  * [Proposal](#proposal)
+    * [Concepts](#concepts)
+      * [Component](#component)
+      * [Subcomponent](#subcomponent)
+      * [Test ID](#test-id)
+      * [Test Environment](#test-environment)
+      * [Test Context](#test-context)
+    * [Test Extension Binaries](#test-extension-binaries)
+      * [Binary Discovery](#binary-discovery)
+        * [OpenShift Payload Extension Binaries](#openshift-payload-extension-binaries)
+        * [Non-Payload Extension Binaries](#non-payload-extension-binaries)
+      * [Binary Format](#binary-format)
+      * [Binary Extraction](#binary-extraction)
+      * [Extension Interface](#extension-interface)
+        * [Info - Extension Metadata](#info---extension-metadata)
+        * [List - Extension Test Listing](#list---extension-test-listing)
+        * [Run-Test - Running Extension Tests](#run-test---running-extension-tests)
+        * [Run-Suite - Running Tests in Local Suites](#run-suite---running-tests-in-local-suites)
+        * [Run-Monitor - Monitoring Cluster during Test Run](#run-monitor---monitoring-cluster-during-test-run)
+        * [Config - Component Configuration Testing](#config---component-configuration-testing)
+      * [Update - Metadata Validation](#update---metadata-validation)
+      * [Extension Implementation](#extension-implementation)
+      * [Test Result Aggregation](#test-result-aggregation)
+    * [Risks and Mitigations](#risks-and-mitigations)
+      * [Binary Incompatibility](#binary-incompatibility)
+        * [CPU Architecture](#cpu-architecture)
+      * [Runtime Size / Speed](#runtime-size--speed)
+      * [Image Size](#image-size)
+      * [Poor Extension Implementation](#poor-extension-implementation)
+    * [Version Skew Strategy](#version-skew-strategy)
+  * [Alternatives](#alternatives)
 <!-- TOC -->
 
 # OpenShift Tests Extensions
@@ -273,12 +273,13 @@ must adhere to.
 Running an extension binary will output the following help text for the initial version of the interface.
 
 ```
-info      - Output test contribution extension version and metadata.
-list      - Output tests supported by this extension.
-run-test  - Run one or more tests and output results.
-run-suite - Runs tests associated with suites supplied by this extension.
-config    - Component configuration management.
-update    - Update git metadata for extension.
+info        - Output test contribution extension version and metadata.
+list        - Output tests supported by this extension.
+run-test    - Run one or more tests and output results.
+run-suite   - Runs tests associated with suites supplied by this extension.
+run-monitor - Runs tests associated with suites supplied by this extension.
+config      - Component configuration management.
+update      - Update git metadata for extension.
 ```
 
 ##### Info - Extension Metadata
@@ -474,6 +475,27 @@ Annotated example `info` output is provided below.
                 # a suite defined in one extension to "absorb" tests 
                 # specified by another extension. To limit the expression
                 # to tests in only certain extensions, you can filter on "source"
+                "source = \"openshift:payload:hyperkube\" && test.name.contains(\"FIPS\"))"
+            ]
+        }
+    ],
+
+    # Monitors are processes that will be run by origin for the duration of
+    # test execution. They are similar to tests in that they can write
+    # artifacts and report back tests results. They differ in that they
+    # cannot have any conflicts/isolations (they must be able to run
+    # during all testing).
+    "monitors": [
+        {
+            # The name of the monitor (will be passed to run-monitor) 
+            "name": "fips-endpoints",
+            "description": "optional description",
+
+            # Monitors can specify whether they should be run in order to 
+            # save resources when they have no value. If they select any tests
+            # origin identifies execution, origin will run the monitor. If
+            # no qualifiers are specified, the monitor will always be run.
+            "qualifiers": [
                 "source = \"openshift:payload:hyperkube\" && test.name.contains(\"FIPS\"))"
             ]
         }
@@ -736,6 +758,30 @@ in parallel, without consideration for system resources or parallelism constrain
 `list` may advertise. Resource constraints will only be honored by `origin` driven
 test orchestration -- it will choreograph invocations of `run-test` consistent with
 those constraints.
+
+##### Run-Monitor - Monitoring Cluster during Test Run
+
+The `run-monitor` will start a monitor identified by `info`. A monitor should 
+stay running until it receives SIGINT from origin. After receiving SIGINT, 
+it will be given a 30-second grace period before receiving a SIGKILL.
+
+```
+$ ./extension-binary run-monitor 
+  --component     "default" or "<product>:<type>:<component>"
+  --platform      The hardware or cloud platform ("aws", "gcp", "metal", ...).
+  ...other environment arguments except config...
+  --name | -n     Test name of the monitor to run (-n can be specified multiple times).
+```
+
+`run-monitor` will receive the same environment parameters as `run-test` --
+exception `--config` which vary during the course of execution -- and
+will output to the same formats (e.g. JSONL test results). `run-monitor` should
+always output at least one test result. A test result in the stdout
+stream must be called 'Monitor: <monitor name>' for each monitor that
+was run with the invocation and reflect the success or failure of the monitor.
+
+Failure to include this test result will result in `origin` creating it
+synthetically and reporting it as a failure.
 
 ##### Config - Component Configuration Testing
 
