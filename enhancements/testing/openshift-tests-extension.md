@@ -22,7 +22,6 @@ authors:
   * [Proposal](#proposal)
     * [Concepts](#concepts)
       * [Component](#component)
-      * [Subcomponent](#subcomponent)
       * [Test ID](#test-id)
       * [Test Environment](#test-environment)
       * [Test Context](#test-context)
@@ -34,7 +33,8 @@ authors:
       * [Binary Extraction](#binary-extraction)
       * [Extension Interface](#extension-interface)
         * [Info - Extension Metadata](#info---extension-metadata)
-        * [List - Extension Test Listing](#list---extension-test-listing)
+        * [List Tests - Extension Test Listing](#list-tests---extension-test-listing)
+        * [List Monitors - List which monitoring tests are available](#list-monitors---list-which-monitoring-tests-are-available)
         * [Run-Test - Running Extension Tests](#run-test---running-extension-tests)
         * [Run-Suite - Running Tests in Local Suites](#run-suite---running-tests-in-local-suites)
         * [Run-Monitor - Monitoring Cluster during Test Run](#run-monitor---monitoring-cluster-during-test-run)
@@ -116,18 +116,13 @@ component name, and the type of the component. A single invocation of an externa
 can only associate with a single component (e.g. it can only list tests for / execute tests
 for a single component).
 
-#### Subcomponent
-
-A further refinement of a component, if necessary. When combined with Component information,
-it should be sufficient to file a Jira ticket that will reach domain experts.
-
 #### Test ID
 
-A unique combination of Component (Product, Type, Component Name), Subcomponent,
-and original test name. A Test ID should not be repeated in a test listing across all
-participating extensions. The Test ID representing a unit of testing logic should
-not change over time (even if the human-readable test name changes, the Test ID
-should remain consistent by using the original test name).
+A unique combination of Component (Product, Type, Component Name) and original test name. 
+A Test ID should not be repeated in a test listing across all participating extensions. 
+The Test ID representing a unit of testing logic should not change over time (even if the 
+human-readable test name changes, the Test ID should remain consistent by using the 
+original test name).
 
 #### Test Environment
 
@@ -277,7 +272,7 @@ info        - Output test contribution extension version and metadata.
 list        - Output tests supported by this extension.
 run-test    - Run one or more tests and output results.
 run-suite   - Runs tests associated with suites supplied by this extension.
-run-monitor - Runs tests associated with suites supplied by this extension.
+run-monitor - Runs one or more test monitors.
 config      - Component configuration management.
 update      - Update git metadata for extension.
 ```
@@ -479,38 +474,16 @@ Annotated example `info` output is provided below.
             ]
         }
     ],
-
-    # Monitors are processes that will be run by origin for the duration of
-    # test execution. They are similar to tests in that they can write
-    # artifacts and report back tests results. They differ in that they
-    # cannot have any conflicts/isolations (they must be able to run
-    # during all testing).
-    "monitors": [
-        {
-            # The name of the monitor (will be passed to run-monitor) 
-            "name": "fips-endpoints",
-            "description": "optional description",
-
-            # Monitors can specify whether they should be run in order to 
-            # save resources when they have no value. If they select any tests
-            # origin identifies execution, origin will run the monitor. If
-            # no qualifiers are specified, the monitor will always be run.
-            "qualifiers": [
-                "source = \"openshift:payload:hyperkube\" && test.name.contains(\"FIPS\"))"
-            ]
-        }
-    ]
-
 }
 ```
 
-##### List - Extension Test Listing
+##### List Tests - Extension Test Listing
 
-The "list" verb will output information about tests exposed by the extension
+The "list tests" action will output information about tests exposed by the extension
 for different environments. A test "environment" describes the attributes of
 cluster under test (e.g. the cloud provider, the topology, etc).
 
-The "list" verb should eliminate tests that are not appropriate for the
+The implementation should eliminate tests that are not appropriate for the
 specified environment.
 
 The arguments accepted by the verb may vary over time and will be
@@ -519,7 +492,7 @@ defined by the extension interface version implemented by the binary.
 **Version 1**
 
 ```
-$ extension-binary list 
+$ extension-binary list tests 
 Environment Information:
   --component     "default" or "<product>:<type>:<component>"
   --platform      The hardware or cloud platform ("aws", "gcp", "metal", ...).
@@ -535,7 +508,7 @@ Optional/Devel:
   --suite         List only tests matched by specified suite's qualifiers.
 ```
 
-The "list" verb will not be provided a kubeconfig and must output tests based solely
+The invocation will not be provided a kubeconfig and must output tests based solely
 on environment information. If no environment arguments are provided, all tests must be
 listed.
 
@@ -565,9 +538,6 @@ line of output in actual listing output.
     # to display the human-readable version of the test
     # name while considering test runs across name changes.
     "originalName": "security version compliance",
-
-    # Optional subcomponent information.
-    "subcomponent": "ui",
 
     # Labels are text strings will can be used like 
     # Ginkgo labels to group and run tests. Until labels
@@ -759,9 +729,40 @@ in parallel, without consideration for system resources or parallelism constrain
 test orchestration -- it will choreograph invocations of `run-test` consistent with
 those constraints.
 
+##### List Monitors - List which monitoring tests are available
+
+Monitors are processes that will be run by origin for the duration of
+test execution. They are similar to tests in that they can write
+artifacts and report back tests results. They differ in that they
+cannot have any conflicts/isolations (they must be able to run
+during all testing).
+
+Similar to "list tests", "list monitors" will receive the environment
+information via command line arguments. It should not list monitors 
+inappropriate for the target environment.
+
+Like tests, monitors are listed by origin in JSONL. A single monitor
+entry includes:
+
+```python
+{
+    # The name of the monitor (will be passed to run-monitor) 
+    "name": "fips-endpoints",
+    "description": "optional description",
+
+    # Monitors can specify whether they should be run in order to 
+    # save resources when they have no value. If they select any tests
+    # origin identifies execution, origin will run the monitor. If
+    # no qualifiers are specified, the monitor will always be run.
+    "qualifiers": [
+        "source = \"openshift:payload:hyperkube\" && test.name.contains(\"FIPS\"))"
+    ]
+}
+```
+
 ##### Run-Monitor - Monitoring Cluster during Test Run
 
-The `run-monitor` will start a monitor identified by `info`. A monitor should 
+The `run-monitor` will start a monitor identified by `list monitors`. A monitor should 
 stay running until it receives SIGINT from origin. After receiving SIGINT, 
 it will be given a 30-second grace period before receiving a SIGKILL.
 
@@ -971,7 +972,7 @@ root.AddCommand(cmd.DefaultExtensionCommands(registry)...)
 The output will be similar to that of the `run-test` output, but each test result
 will be expanded to include:
 
-- Component & subcomponent
+- Component
 - Environment
 - Testing Context
 
@@ -1006,7 +1007,6 @@ from prowjob names.
         "product": "openshift",
         "type": "payload",
         "component": "hyperkube",
-        "subcomponent": "logs",
     },
 
     "originalComponent": {
@@ -1015,7 +1015,6 @@ from prowjob names.
         "product": "openshift",
         "type": "payload",
         "component": "hyperkube",
-        "subcomponent": "logs",
     },
     
     "environment": {
@@ -1157,7 +1156,7 @@ increases, it may lead to a noticeable increase in overall payload size.
 
 #### Poor Extension Implementation
 
-Providing a contract that must be implemented without by test extensions without centralized
+Providing a contract that must be implemented by test extensions without centralized
 control & review of the implementation leaves space for contributions that violate the
 expectations of that contract.
 
